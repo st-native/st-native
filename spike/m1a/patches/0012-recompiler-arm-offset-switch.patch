@@ -1,0 +1,42 @@
+diff --git a/recompiler/src/decode.cpp b/recompiler/src/decode.cpp
+index 7ef0791..27ea781 100644
+--- a/recompiler/src/decode.cpp
++++ b/recompiler/src/decode.cpp
+@@ -58,10 +58,37 @@ bool thumb_jump_table(const Module& m, uint32_t addr, uint32_t rn, std::vector<u
+ 
+ // mwcc ARM switch:  cmp rX,#n; addls pc,pc,rX,lsl #2; b default; b case0; b case1; ...
+ // Signed index:     cmp rX,#n; bgt default; cmp rX,#0; addge pc,pc,rX,lsl #2; b default; b case0; ...
++// Offset index:     cmp rY,#n; bgt default; subs rX,rY,#k; addpl pc,pc,rX,lsl #2; b default; b case0; ...
++//                   (cases k..n of rY: n - k + 1 entries; the compare is on rY, not on the index rX)
+ bool arm_jump_table(const Module& m, uint32_t addr, uint32_t op, std::vector<uint32_t>& out) {
+     uint32_t rm = op & 15;
+     const bool signed_index = (op >> 28) == 0xA;  // addge: the compare just before is the lower check
+     int count = -1;
++    auto rot_imm = [](uint32_t p) {
++        const uint32_t imm = p & 0xFF, rot = ((p >> 8) & 15) * 2;
++        return rot ? (imm >> rot) | (imm << (32 - rot)) : imm;
++    };
++    if (addr >= m.base + 4) {
++        const uint32_t p = m.read32(addr - 4);
++        if ((p & 0x0FF0F000) == (0x02500000 | (rm << 12))) {  // subs rm, rY, #k: the index is computed right here
++            const uint32_t ry = (p >> 16) & 15, k = rot_imm(p);
++            for (uint32_t back = 8; back <= 24 && addr >= m.base + back; back += 4) {
++                const uint32_t q = m.read32(addr - back);
++                if ((q & 0x0FFFF000) != (0x03500000 | (ry << 16))) continue;  // cmp rY, #n
++                const uint32_t b = m.read32(addr - back + 4) & 0xFF000000;
++                const uint32_t n = rot_imm(q);
++                if ((b == 0xCA000000 || b == 0x8A000000) && n >= k) count = int(n - k) + 1;  // bgt / bhi default
++                break;
++            }
++            if (count <= 0 || count > 4096) return false;
++            for (int i = 0; i < count; i++) {
++                const uint32_t t = addr + 8 + 4 * i;
++                if (!m.contains(t, 4)) return false;
++                out.push_back(t);
++            }
++            return true;
++        }
++    }
+     for (uint32_t back = 4; back <= 20 && addr >= m.base + back; back += 4) {
+         uint32_t p = m.read32(addr - back);
+         if ((p & 0x0FFFF000) == (0x03500000 | (rm << 16))) {  // cmp rm, #imm

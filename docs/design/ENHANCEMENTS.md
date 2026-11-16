@@ -1,0 +1,38 @@
+# Enhancements: what the app and runtime can do, and what needs a game hook
+
+Status: **Proposed** (2026-11-14, ADR-0008). For each goal: the part that lives in the **app** (window, input,
+presentation, settings, launcher) or the **runtime** (the engine: melonDS core, renderer, scheduler, audio), and the
+part that needs **integration with the game's logic**: a hook (`hooks.txt` `replace`/`before`/`instead`) or a read of
+verified game state at a named address. Game integration is our own small C/C++ at verified addresses, never a
+translation of the game's functions; every address records how it was found (AGENTS.md).
+
+Every enhancement is optional, off in the "Original" preset, and checked with the scripted replays (identical
+per-frame hashes when it is off; the documented difference when it is on). Labels: **Verified** (the engine already
+does it, checked in our build), **Likely** (the engine has it, not yet tried on Spirit Tracks), **Proposed**.
+
+| Goal | App / runtime (no game logic) | Game integration (hooks, verified state) |
+|---|---|---|
+| **Remappable controls** | Keys, gamepad buttons and axes to DS buttons; profiles; stick-to-D-pad; mouse as touch (Verified in `st_native`). Remapping UI and profiles: app (M4). | None for buttons. |
+| **DS gameplay that does not suit modern controls** (Spirit Tracks is stylus-first: walking, sword, rolling, items, train lever and whistle, map drawing, the Spirit Flute) | A touch router: the cursor driven by the stick or mouse; gestures (tap, swipe, circle) bound to buttons; on-screen regions for fixed UI (the train's lever and whistle sit at fixed bottom-screen positions). Microphone: real input and a synthesized "blow" (melonDS mic interface, ADR-0006). | **Needed for good controller play:** where Link is on screen and which mode the game is in (field, train, menu, map) to aim gestures; direct analog movement and button attacks (as the engine does for FFCC: `instead` hooks on movement and input packing); item aiming. Read-only state first, hooks only where reading is not enough. |
+| **Spirit Flute by buttons** (Proposed) | Six remappable note actions for keyboard and gamepad. Press to play, hold to sustain, release to stop. Show the active bindings next to the pipes and the turn cue during duets. Start with tube selection and virtual breath. | Use a small note-selection hook if touch synthesis introduces delay or plays intermediate notes. Preserve the original duet timing and keep stylus and mic input in the Original preset. Validate with a solo song and Gage's duet using only buttons and no physical microphone. |
+| **Flexible layouts for the two screens** | Side by side, stacked, one large plus one small, swap, a second window, rotation, gaps and scaling: all presentation (DUAL_SCREEN_UX). | **Auto layout** (e.g. enlarge the top screen while the bottom one shows a static map) needs a verified "what is on each screen" flag (ADR-0005: from game state, never from pixels). |
+| **Selected cutscenes adapted to one screen** | Composing both screens into one frame, crops and transitions: presentation. | **Needed:** knowing that a cutscene runs and which one (a hook on its start/end); for cutscenes whose camera spans both screens, re-framing means changing the game's camera or projection for those scenes (hooks at the projection setup, as FFCC's aspect hook). Per cutscene, curated. |
+| **Other modernisations of things that aged badly** (Proposed examples: faster text, skipping already-seen cutscenes, quicker repetitive train trips, less stylus-only friction in menus) | Fast-forward on demand (Verified: Tab); speed-ups against load stalls (Likely: fast cartridge reads and a faster ARM9 are engine defaults); save states (Proposed, runtime). | **Needed** for anything that changes the game's rules or pacing: text speed, cutscene skip, train travel. Each one a reviewed hook, listed and labelled, off by default. |
+| **Higher internal resolution** | The engine's OpenGL renderer at N x native (`VideoSettings::scale`, 1-16) (Likely); filters at presentation. | None. (2D layers stay at native resolution unless replaced by mods.) |
+| **Widescreen** | Rendering a wider 3D picture (`VideoSettings::wide_extra`, Likely) and placing HUD sprites at the edges (`hud_edges`, Likely). | **Needed:** the game's projection must be widened (the engine's FFCC hook on the perspective setup is the model), objects the game culls outside 4:3 must not pop, and 2D backgrounds do not extend. Experimental, per scene. |
+| **Smoother motion without speeding up the simulation** | The game draws its 3D at a lower rate than the display; the engine blends the last two scenes for each displayed frame (`interpolate`, `display_rate` with `render_between`, Likely). The simulation keeps the DS's own pace (VBlank-paced; the ARM9 speed-up only idles longer). | **Helpful:** a hint at camera cuts and scene changes, so frames are not blended across a cut (a hook or a verified flag). |
+| **Mods** | Texture replacement from the renderer's texture cache (engine plan); file-level replacement of the game's own files as the cartridge is read (the runtime already logs each file read: `trace_files`); a mod manager (SETTINGS_AND_MODDING). Mods ship their own content, never game data. | **Needed** for gameplay or code mods: they are hooks, loaded and listed like the enhancement hooks. |
+
+## Order
+
+1. Windows x64 first (M2-M4): remapping, touch router, layouts, launcher.
+2. Graphics (M5): resolution, interpolation, then experimental widescreen and single-screen cutscenes.
+3. Mods (M7) once hooks and settings are stable.
+
+## What makes a game hook acceptable
+
+- The address is a fact found in our own analysis of the player's dump (the R1 tools, the recompiler's report or the
+  call counters) and recorded with how it was found.
+- The hook is small and does one thing; it calls the game's own recompiled functions where possible instead of
+  re-implementing them.
+- It is checked with a scripted replay: off gives the original per-frame hashes; on gives a documented change.

@@ -1,0 +1,16 @@
+diff --git a/game/CMakeLists.txt b/game/CMakeLists.txt
+index ef91f1e..e95dbc3 100644
+--- a/game/CMakeLists.txt
++++ b/game/CMakeLists.txt
+@@ -115,9 +115,10 @@ if(FFCC_ROM)
+   add_dependencies(ffcc cfie_game)  # (built together, next to the executable)
+ endif()
+ target_link_libraries(ffcc PRIVATE ntr_recomp ntr_runtime ntr_common SDL3::SDL3-static rmlui_backend)
+-if(NOT MSVC)
++if(NOT MSVC AND NOT APPLE)
+   # melonDS calls the Platform:: functions that ntr_runtime defines, and ntr_runtime calls melonDS: GNU ld reads each static
+   # library once, so those libraries are rescanned until nothing is left undefined (link.exe does not care about the order).
++  # CMake has no RESCAN feature for Apple's linker, which needs none: ld64 resolves symbols across archives in any order.
+   target_link_libraries(ffcc PRIVATE "$<LINK_GROUP:RESCAN,ntr_runtime,melonds_core,melonds_net>")
+ endif()
+ if(WIN32)

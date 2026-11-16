@@ -1,0 +1,12 @@
+diff --git a/game/src/ui/slider.hpp b/game/src/ui/slider.hpp
+index 3ed80c4..b7ee965 100644
+--- a/game/src/ui/slider.hpp
++++ b/game/src/ui/slider.hpp
+@@ -2,6 +2,7 @@
+ 
+ #include "component.hpp"
+ 
++#include <climits>
+ #include <functional>
+ 
+ namespace ui {

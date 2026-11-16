@@ -1,0 +1,34 @@
+# Recompiler hooks for Spirit Tracks, USA/Australia revision 0 (BKIE, SHA-1 1f0921b5e99db9d92d24710f1b004e4f3c997b73).
+# Format (the engine's): <module> <address> replace|before|instead <c_function>
+#   replace: the recompiled body is replaced by a call to the C function.
+#   before:  the C function is called on entry, then the recompiled body runs.
+#   instead: the C function (returning int) is called on entry; the recompiled body runs if it returns 0.
+# Facts only: addresses and the names of public NitroSDK routines. How each was found is recorded next to it; all were
+# checked against the maintainer's dump on 2026-11-13 (M1b) and are starts in dsd 0.12.1's function list.
+
+# NitroSDK thread context switches: guest threads run on host fibers (the engine's runtime/src/nitro.cpp).
+# Found by instruction shape in the static ARM9 module (two of the three hand-written routines that switch CPU mode and
+# store or load r0-r14 of an OSContext); each matches the runtime's replacement step by step: CP context at +0x48,
+# CPSR at +0, SVC stack at +0x44, pc+4 at +0x40, r0 = 1 in the saved context, initial CPSR 0x1F/0x3F by the Thumb bit.
+# Same relative layout as in the engine's FFCC config (Load = Save + 0x4C).
+main 0202708c replace ntr_nitro_init_context   # OS_InitContext
+main 020270f8 replace ntr_nitro_save_context   # OS_SaveContext
+main 02027144 replace ntr_nitro_load_context   # OS_LoadContext
+
+# IRQ dispatch (ITCM). Found as the ITCM routine that reads IME/IE/IF at 0x04000208-0x04000214, acknowledges the
+# lowest pending IRQ, loads its handler from the table at 0x027E0198 (DTCM) and enters it with LR set to the routine
+# that follows it, 0x01FFBDC8 (OS_IrqHandler_ThreadSwitch). Its effects are those of the runtime's
+# ntr::nitro::irq_handler (r0 handler, r1 table, r2 IF, r3 0x80000000, r12 0x04000210).
+itcm 01ffbd70 replace st_os_irq_handler        # OS_IrqHandler
+
+# DS Protect (anti-piracy middleware in overlay 1): report a genuine cartridge, as the engine does for FFCC.
+# dsd 0.12.1 lists 41 encrypted DS Protect functions in ov001 (flagged !dsprot in functions.txt, which the recompiler
+# never translates). These six are the ones unencrypted game code calls (calls from ov001, ov026 and ov084 in our R1
+# call graph); the others are reached only from inside them. Their bodies were not read, decrypted or analysed.
+# (ov017 also calls 0x020C19CC, but ov017 occupies the same addresses as ov001, so that call stays inside ov017.)
+ov001 020c0e14 replace ntr_dsprot_not_detected
+ov001 020c0e8c replace ntr_dsprot_not_detected
+ov001 020c0f04 replace ntr_dsprot_not_detected
+ov001 020c0f7c replace ntr_dsprot_not_detected
+ov001 020c0ff4 replace ntr_dsprot_not_detected
+ov001 020c106c replace ntr_dsprot_not_detected

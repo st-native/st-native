@@ -1,0 +1,197 @@
+diff --git a/recompiler/include/recomp/recomp.hpp b/recompiler/include/recomp/recomp.hpp
+--- a/recompiler/include/recomp/recomp.hpp
++++ b/recompiler/include/recomp/recomp.hpp
+@@ -61,9 +61,20 @@
+     bool instead = false;     // call it on entry; it returns nonzero if it did the call, 0 to run the recompiled body
+ };
+ 
++// interpret.txt: guest code that is never recompiled, even when called directly. Calls and jumps to it go through
++// the runtime (ntr_call / ntr_jump), which finds no recompiled function there and runs it on the interpreter. For
++// code whose bytes in the ROM are not what runs (e.g. routines a game decrypts in place before calling them).
++struct InterpretRange {
++    int module = 0;
++    uint32_t addr = 0, size = 0;
++};
++
+ struct Config {
+     std::vector<FunctionSeed> functions;
+     std::vector<Hook> hooks;
++    std::vector<InterpretRange> interpret;
++
++    bool interpreted(int module, uint32_t addr) const;
+ };
+ 
+ struct Program {
+diff --git a/recompiler/src/program.cpp b/recompiler/src/program.cpp
+--- a/recompiler/src/program.cpp
++++ b/recompiler/src/program.cpp
+@@ -160,7 +160,29 @@
+                                      ": expected '<module> <addr> replace|before|instead <c_function>'");
+         cfg.hooks.push_back({m->id, uint32_t(std::stoul(addr, nullptr, 16)), repl, kind == "before", kind == "instead"});
+     }
++
++    // interpret.txt (optional): '<module> <addr> <size>' ranges of guest code that are never recompiled.
++    std::ifstream in(dir / "interpret.txt");
++    lineno = 0;
++    while (in && std::getline(in, line)) {
++        lineno++;
++        line = trim(line);
++        if (line.empty()) continue;
++        std::istringstream ss(line);
++        std::string mod, addr, size;
++        ss >> mod >> addr >> size;
++        const Module* m = program.module_by_name(mod);
++        if (!m || size.empty())
++            throw std::runtime_error("interpret.txt:" + std::to_string(lineno) + ": expected '<module> <addr> <size>'");
++        cfg.interpret.push_back({m->id, uint32_t(std::stoul(addr, nullptr, 16)), uint32_t(std::stoul(size, nullptr, 16))});
++    }
+     return cfg;
+ }
+ 
++bool Config::interpreted(int module, uint32_t addr) const {
++    for (const InterpretRange& r : interpret)
++        if (r.module == module && addr >= r.addr && addr - r.addr < r.size) return true;
++    return false;
++}
++
+ }  // namespace recomp
+diff --git a/recompiler/src/analysis.cpp b/recompiler/src/analysis.cpp
+--- a/recompiler/src/analysis.cpp
++++ b/recompiler/src/analysis.cpp
+@@ -3,6 +3,7 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <deque>
++#include <set>
+ 
+ #include "recomp/recomp.hpp"
+ 
+@@ -63,6 +64,8 @@
+ 
+     size_t add_function(int module, uint32_t entry, bool thumb, std::string name = {}) {
+         if (const Module* m = program.find_module(module); m && m->interpret) return SIZE_MAX;
++        // interpret.txt; a hooked entry inside such a range is still a function (its body is the hook)
++        if (program.config.interpreted(module, entry) && !hooked(module, entry)) return SIZE_MAX;
+         auto key = std::make_pair(module, entry);
+         auto it = out.index.find(key);
+         if (it != out.index.end()) {
+@@ -84,6 +87,12 @@
+ 
+     bool is_entry(int module, uint32_t addr) const { return out.index.count({module, addr}) != 0; }
+ 
++    bool hooked(int module, uint32_t addr) const {
++        for (const Hook& h : program.config.hooks)
++            if (h.module == module && h.addr == addr) return true;
++        return false;
++    }
++
+     void explore(size_t fi) {
+         // Copy what we need: add_function() may reallocate out.functions.
+         const int module = out.functions[fi].module;
+@@ -97,10 +106,13 @@
+         std::set<uint32_t> labels;
+         std::vector<std::string> warnings;
+         std::vector<uint32_t> work{entry};
++        std::set<uint32_t> table_slots;  // the entries of this body's jump tables (each usually a `b case`)
+ 
+         auto enqueue_local = [&](uint32_t target) {
+             // Branches to another function's entry are tail calls, not part of this body.
+             if (target != entry && is_entry(module, target)) return;
++            // So are branches into code that is only ever interpreted (interpret.txt).
++            if (program.config.interpreted(module, target)) return;
+             if (!m->contains(target, thumb ? 2 : 4)) {
+                 warnings.push_back("branch outside module to " + hex(target));
+                 return;
+@@ -114,6 +126,7 @@
+             work.pop_back();
+             if (instrs.count(a)) continue;
+             if (a != entry && is_entry(module, a)) continue;  // fell into the next function: tail call
++            if (a != entry && program.config.interpreted(module, a)) continue;  // fell into interpreted code
+             Instr in = decode(*m, a, thumb);
+             // mwcc emits Thumb BL to a label of the same function as a long-range branch.
+             if (in.flow == Flow::Call && in.target_thumb == thumb && in.target > entry && in.target < entry + extent) {
+@@ -153,6 +166,11 @@
+             }
+             switch (in.flow) {
+             case Flow::Jump:
++                // A switch case reached from a jump-table slot that is also listed as a function start: the list
++                // split this function there (an ordinary `b` to another start is a tail call and is not reported).
++                if (table_slots.count(a) && in.target != entry && is_entry(module, in.target))
++                    out.warnings.push_back("jump table target is a function entry: " +
++                                           out.functions[out.index.at({module, in.target})].c_name());
+                 if (in.target_thumb == thumb) enqueue_local(in.target);
+                 break;
+             case Flow::Call: {
+@@ -165,7 +183,14 @@
+                 break;
+             }
+             case Flow::JumpTable:
+-                for (uint32_t t : in.table) enqueue_local(t);
++                for (uint32_t t : in.table) {
++                    table_slots.insert(t);
++                    // A switch case that is also listed as a function start: the list split this function there.
++                    if (t != entry && is_entry(module, t))
++                        out.warnings.push_back("jump table target is a function entry: " +
++                                               out.functions[out.index.at({module, t})].c_name());
++                    enqueue_local(t);
++                }
+                 break;
+             default:
+                 break;
+diff --git a/recompiler/src/emit.cpp b/recompiler/src/emit.cpp
+--- a/recompiler/src/emit.cpp
++++ b/recompiler/src/emit.cpp
+@@ -9,6 +9,7 @@
+ #include <cstdarg>
+ #include <cstdio>
+ #include <fstream>
++#include <map>
+ #include <stdexcept>
+ 
+ #include "recomp/recomp.hpp"
+@@ -800,6 +801,7 @@
+         std::vector<const Module*> ovs;
+         for (const Module& m : program.modules)
+             if (is_overlay(m.id)) ovs.push_back(&m);
++        std::map<int, std::vector<std::pair<uint32_t, uint32_t>>> probes_of;  // per overlay, for interpret ranges
+         t << "const NtrOverlayInfo ntr_recomp_overlays[] = {\n";
+         for (const Module* o : ovs) {
+             std::vector<const Module*> others;  // overlapping, not identical
+@@ -858,9 +860,26 @@
+             for (auto& pr : probes) t << "0x" << std::hex << pr.second << "u, ";
+             if (probes.empty()) t << "0";
+             t << std::dec << "}},\n";
++            probes_of[o->id] = probes;
+         }
+-        if (ovs.empty()) t << "    {0, 0, 0, 0, 0, {0}, {0}},\n";
+-        t << "};\nconst size_t ntr_recomp_overlay_count = " << ovs.size() << ";\n";
++        // interpret.txt ranges: "resident" while the module that carries them is (its probe words), so the runtime
++        // runs code that starts there purely on its interpreter (patch 0009). Ids from 1000 (they hold no functions).
++        for (size_t i = 0; i < program.config.interpret.size(); i++) {
++            const InterpretRange& r = program.config.interpret[i];
++            const std::vector<std::pair<uint32_t, uint32_t>> pr =
++                probes_of.count(r.module) ? probes_of[r.module] : std::vector<std::pair<uint32_t, uint32_t>>{};
++            t << "    {" << (1000 + i) << ", 0x" << std::hex << r.addr << "u, 0x" << r.size << "u, " << std::dec
++              << "NTR_OVERLAY_INTERPRET, " << pr.size() << ", {";
++            for (auto& x : pr) t << "0x" << std::hex << x.first << "u, ";
++            if (pr.empty()) t << "0";
++            t << "}, {";
++            for (auto& x : pr) t << "0x" << std::hex << x.second << "u, ";
++            if (pr.empty()) t << "0";
++            t << std::dec << "}},\n";
++        }
++        const size_t overlay_rows = ovs.size() + program.config.interpret.size();
++        if (overlay_rows == 0) t << "    {0, 0, 0, 0, 0, {0}, {0}},\n";
++        t << "};\nconst size_t ntr_recomp_overlay_count = " << overlay_rows << ";\n";
+ 
+         // The module's interface to the host (ntr/recomp.h): the runtime's services and the hooks, by name.
+         t << "\n/* ---- the interface to the host ---- */\nNtrHostApi ntr_host;\n";
+@@ -869,7 +888,7 @@
+         t << "\n#ifdef _WIN32\n#define NTR_GAME_EXPORT __declspec(dllexport)\n#else\n"
+              "#define NTR_GAME_EXPORT __attribute__((visibility(\"default\")))\n#endif\n\n"
+              "static const NtrGameInfo ntr_game_info = {NTR_ABI_VERSION, ntr_recomp_functions, "
+-          << order.size() << ", ntr_recomp_overlays, " << ovs.size() << "};\n\n"
++          << order.size() << ", ntr_recomp_overlays, " << overlay_rows << "};\n\n"
+           << "#define NTR_COPY_SERVICE(ret, name, args) ntr_host.name = api->name;\n\n"
+           << "NTR_GAME_EXPORT const NtrGameInfo* ntr_game_load(const NtrHostApi* api) {\n"
+              "    if (!api || api->abi != NTR_ABI_VERSION || api->size != sizeof(NtrHostApi) || !api->find_hook) return 0;\n"

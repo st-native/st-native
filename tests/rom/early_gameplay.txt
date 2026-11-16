@@ -1,0 +1,112 @@
+# Session 3: from power-on through the first scene's two choices into the first minutes of play (Link walks around
+# Niko's house by touch, talks, dismisses dialogue). Blank save (--no-save), program defaults. About 8 min 38 s of
+# game time (31,000 frames). Our own input data: no game data in this file.
+
+1000 press START                   # skip the opening
+1100 touch 128 120                 # touch the screen
+1850 touch 128 160                 # dismiss the message
+2000 touch 130 62                  # file 1
+2200 touch 190 176                 # OK
+2400 touch 202 110                 # "Is this what you want to name your character?" Yes
+2600 touch 202 110                 # "Do you hold the stylus in your right or left hand?" Right
+2800 touch 205 110                 # "You're right-handed?" Yes
+3150 touch 128 160                 # dismiss the message
+3400 touch 130 62                  # file 1 (now named, three hearts)
+3600 touch 128 118                 # Start
+3800 touch 130 91                  # Adventure: the new game starts
+12300 press A 4
+12540 press A 4
+12780 press A 4
+13020 press A 4
+13260 press A 4
+13500 press A 4
+13740 press A 4
+13980 press A 4
+14220 press A 4
+14460 press A 4
+14700 press A 4
+14940 press A 4
+15180 press A 4
+15420 press A 4
+15660 press A 4
+15900 press A 4
+16140 press A 4
+16380 press A 4
+16620 press A 4
+16860 press A 4
+17450 touch 204 109
+17700 press A 4
+17940 press A 4
+18180 press A 4
+18420 press A 4
+18660 press A 4
+18900 press A 4
+19140 press A 4
+19380 press A 4
+19800 press A 4
+20040 press A 4
+20280 press A 4
+20520 press A 4
+20750 touch 205 110
+20760 press A 4
+21000 press A 4
+21240 press A 4
+21480 press A 4
+21720 press A 4
+21960 press A 4
+22200 press A 4
+22440 press A 4
+22680 press A 4
+22920 press A 4
+23160 press A 4
+23400 press A 4
+23640 press A 4
+23880 press A 4
+24120 press A 4
+
+17450 touch 204 109  # 'Sort of.'
+20750 touch 205 110  # first answer of the second choice
+
+# first minutes of play: touch-and-hold moves Link toward the touch
+24400 touch 245 85 150  # right, to Niko
+24600 press A 4
+24800 touch 8 90 150  # left
+25000 touch 128 8 150  # up
+25200 touch 128 185 150  # down
+25400 press A 4
+25600 touch 245 140 150  # right, lower
+25800 touch 60 30 150  # up-left
+26000 touch 245 85 150  # right, to Niko
+26200 press A 4
+26400 touch 8 90 150  # left
+26600 touch 128 8 150  # up
+26800 touch 128 185 150  # down
+27000 press A 4
+27200 touch 245 140 150  # right, lower
+27400 touch 60 30 150  # up-left
+27600 touch 245 85 150  # right, to Niko
+27800 press A 4
+28000 touch 8 90 150  # left
+28200 touch 128 8 150  # up
+28400 touch 128 185 150  # down
+28600 press A 4
+28800 touch 245 140 150  # right, lower
+29000 touch 60 30 150  # up-left
+29200 touch 245 85 150  # right, to Niko
+29400 press A 4
+29600 touch 8 90 150  # left
+29800 touch 128 8 150  # up
+30000 touch 128 185 150  # down
+30200 press A 4
+30400 touch 245 140 150  # right, lower
+30600 touch 60 30 150  # up-left
+30800 touch 245 85 150  # right, to Niko
+
+17400 shot 01_17400
+20800 shot 02_20800
+24400 shot 03_24400
+26000 shot 04_26000
+28000 shot 05_28000
+30000 shot 06_30000
+31000 shot 07_31000
+31000 quit

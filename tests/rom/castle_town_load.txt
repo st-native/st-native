@@ -1,0 +1,21 @@
+# Session 4, second part: power on again with the save that castle_town.txt made, and load it. Program defaults.
+# Our own input data: no game data in this file.
+# Run it on that save, read-only so the check can be repeated:
+#   st_native <rom> --module <st_game.dll> --save build/route/castle_town.sav --read-only-save --headless
+#     --script tests/rom/castle_town_load.txt --hashes <file> --shots <dir>
+# Expected: Select File lists file 1 with the name and three hearts (the other slot "New Game!"); Start, Adventure;
+# the game resumes in Castle Town, at the station beside Alfonzo and the train.
+
+1000 press START                   # skip the opening
+1100 touch 128 120                 # title screen: touch the screen
+1250 shot 01_select_file           # file 1 saved, file 2 "New Game!" (no "File created." this time)
+1300 touch 130 62                  # file 1
+1450 shot 02_file_menu             # Start / Copy / Erase
+1500 touch 128 118                 # Start
+1650 shot 03_mode_select           # Adventure / Battle / Tag Mode / Options
+1700 touch 130 91                  # Adventure: the saved game loads
+2050 shot 04_castle_town           # "Castle Town" banner, the town map on the top screen
+2600 shot 05_station               # Link at the station, beside Alfonzo and the train
+2700 touch 226 180 6               # Menu
+2900 shot 06_menu                  # the menu bar: Save / Collection / Map
+3000 quit

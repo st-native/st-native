@@ -1,0 +1,20 @@
+diff --git a/runtime/src/runtime.cpp b/runtime/src/runtime.cpp
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -649,7 +649,15 @@
+     auto it = functions_.find(target);
+     if (it == functions_.end()) return nullptr;
+     const auto& cands = it->second;
+-    if (cands.size() == 1) return cands[0];
++    if (cands.size() == 1) {
++        // A lone candidate in an overlay counts only while that overlay is resident: another overlay at the same
++        // address may have no function listed there (its code then runs on the interpreter instead of this one).
++        const NtrFuncEntry* e = cands[0];
++        if (e->module < NTR_MODULE_OVERLAY(0)) return e;
++        const u32 id = e->module - NTR_MODULE_OVERLAY(0);
++        if (id < overlays_by_id_.size() && overlays_by_id_[id] && !overlay_resident(*overlays_by_id_[id])) return nullptr;
++        return e;
++    }
+     // A resident overlay (or code region copied over static code) wins over the static module beneath it.
+     const NtrFuncEntry* fixed = nullptr;
+     for (const NtrFuncEntry* e : cands) {

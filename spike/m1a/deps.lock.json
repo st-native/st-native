@@ -1,0 +1,29 @@
+{
+ "comment": "M1a portability spike: the exact upstream revisions used. Engine = FFCCEOT-Recomp (origin of ntr-recomp/ntr-runtime, docs/research/EXISTING_PROJECTS.md). Dependencies fetched by the engine's own CMake at configure time are listed with the tag it pins.",
+ "engine": {
+  "repo": "https://github.com/JonathanDC64/FFCCEOT-Recomp.git",
+  "commit": "934c7434c9a6c2866fea17fa36098ef9c0652fc4",
+  "date": "2026-10-17",
+  "license": "GPL-3.0"
+ },
+ "submodules": {
+  "third_party/melonDS": {
+   "repo": "https://github.com/melonDS-emu/melonDS",
+   "commit": "906e9ebb27da8c6a715cd7abab4abfe8a8d29427",
+   "date": "2026-08-24",
+   "license": "GPL-3.0-or-later"
+  }
+ },
+ "fetched_by_cmake": {
+  "SDL3": {"repo": "https://github.com/libsdl-org/SDL.git", "tag": "release-3.4.18"},
+  "freetype": {"repo": "https://github.com/freetype/freetype.git", "tag": "VER-2-14-3"},
+  "RmlUi": {"repo": "https://github.com/mikke89/RmlUi.git", "tag": "6.3"}
+ },
+ "reference_only": {
+  "phantom-hourglass-recomp": {
+   "repo": "https://github.com/dguillot-gh/phantom-hourglass-recomp",
+   "commit": "27ec7aec",
+   "note": "same engine; compared later, not built in this round"
+  }
+ }
+}

@@ -1,0 +1,30 @@
+# M2, first milestone: from power-on to a new game, as scripted input for st_native (format: app/st_native.cpp).
+# Spirit Tracks USA/Australia rev. 0 (BKIE), starting from a blank cartridge save (run with --no-save), with the
+# program's defaults (ARM9 at 4x, fast cartridge reads, English). Frames count from the first frame shown; touches are
+# bottom-screen coordinates (0-255 x 0-191). Our own input data: no game data in this file.
+# Run it:  st_native <rom> --module <st_game.dll> --no-save --headless --script tests/rom/boot_new_game.txt
+#            --hashes <file> --shots <dir>          (docs/BUILDING.md, "Reproducible boot")
+
+300 shot 01_intro                  # the opening scene (after the Nintendo screen)
+1000 press START                   # skip the opening
+1060 shot 02_title                 # title screen: "Touch the screen!"
+1100 touch 128 120                 # touch the screen
+1800 shot 03_file_created          # a blank cartridge: the game creates its save ("File created.")
+1850 touch 128 160                 # dismiss the message
+1960 shot 04_select_file           # Select File: two "New Game!" slots
+2000 touch 130 62                  # file 1
+2140 shot 05_name_entry            # the name keyboard (the console's name is filled in)
+2200 touch 190 176                 # OK
+2400 touch 202 110                 # "Is this what you want to name your character?" Yes
+2600 touch 202 110                 # "Do you hold the stylus in your right or left hand?" Right
+2800 touch 205 110                 # "You're right-handed?" Yes
+3100 shot 06_save_complete         # "Save complete."
+3150 touch 128 160                 # dismiss the message
+3400 touch 130 62                  # file 1 (now named, three hearts)
+3500 shot 07_file_menu             # Start / Copy / Erase
+3600 touch 128 118                 # Start
+3700 shot 08_mode_select           # Adventure / Battle / Tag Mode / Options
+3800 touch 130 91                  # Adventure: the new game starts
+4400 shot 09_new_game_prologue     # the prologue ("This is a tale from long ago...")
+6200 shot 10_prologue_later
+6200 quit

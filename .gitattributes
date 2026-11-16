@@ -1,0 +1,7 @@
+# Line endings: LF everywhere, CRLF for Windows batch files.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.rom binary
+*.nds binary
+*.bin binary

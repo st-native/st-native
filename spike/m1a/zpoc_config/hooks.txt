@@ -1,0 +1,1 @@
+# Recompiler hooks for ZPOC: none (no NitroSDK, no threads).

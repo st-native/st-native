@@ -1,0 +1,10 @@
+# Spirit Tracks, USA/Australia revision 0 (BKIE): guest code that is never recompiled (the engine's interpret.txt,
+# patch 0008). Format: <module> <address> <size>. Used by tools/build/st_build.py --dsprot original.
+#
+# The block of overlay 1 that holds DS Protect's encrypted routines. Its bytes in the ROM are not the code that runs
+# (the game decrypts each routine in place before calling it), so it cannot be translated ahead of time; calls into it
+# go through the runtime, which finds no recompiled function there and runs the game's own code on melonDS's
+# interpreter, as the console would. Nothing here is decrypted, read or analysed by us.
+# Facts: start of the first and end of the last of the 41 encrypted routines (0x020C0A04 to 0x020C2550), as listed by
+# dsd 0.12.1 in R1 (addresses only; R1_REAL_ROM_TOOLCHAIN.md section 5).
+ov001 020c0a04 1b4c

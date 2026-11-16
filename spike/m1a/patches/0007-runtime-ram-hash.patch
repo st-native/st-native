@@ -1,0 +1,23 @@
+diff --git a/runtime/include/ntr/runtime.hpp b/runtime/include/ntr/runtime.hpp
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -77,6 +77,8 @@
+     double emu_ms = 0;               // host time spent emulating this frame (not the frontend's pacing or presenting)
+     uint64_t interp_steps = 0;       // instructions the interpreter ran for the frames' functions this frame
+     uint64_t state_hash = 0;         // RuntimeOptions::frame_hash: a hash of the emulated memory and the CPU's clock
++    uint64_t ram_hash = 0;           // RuntimeOptions::frame_hash: the same memory without the clock (a native
++                                     // replacement of a guest function may take other cycles, not other results)
+ };
+ 
+ // Callbacks into the frontend.
+diff --git a/runtime/src/runtime.cpp b/runtime/src/runtime.cpp
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -396,6 +396,7 @@
+         uint64_t h = ntr::hash64(n.MainRAM, size_t(n.MainRAMMask) + 1);
+         h = ntr::hash64(n.SharedWRAM, n.SharedWRAMSize, h);
+         h = ntr::hash64(n.ARM7WRAM, n.ARM7WRAMSize, h);
++        frame.ram_hash = h;
+         const uint64_t clock[2] = {uint64_t(cpu.cycles), frames_};
+         frame.state_hash = ntr::hash64(clock, sizeof clock, h);
+     }

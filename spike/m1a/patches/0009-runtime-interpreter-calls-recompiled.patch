@@ -1,0 +1,45 @@
+diff --git a/runtime/src/runtime.cpp b/runtime/src/runtime.cpp
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -760,10 +760,32 @@
+     auto pc_of = [&] { return arm.R[15] - ((arm.CPSR & 0x20) ? 2 : 4); };
+ 
+     load(target);
++    bool native_return = false;
++    // Code in an interpreted range (regions.txt `interpret`, interpret.txt) may rely on memory that differs from the
++    // ROM the recompiled code came from (copied or decrypted at run time): run it, and what it calls, purely here.
++    bool pure = false;
++    for (const NtrOverlayInfo* ov : interpreted_)
++        if ((target & ~1u) - ov->base < ov->size && overlay_resident(*ov)) pure = true;
+     const u32 stall = melonDS::CPUStop_DMA9 | melonDS::CPUStop_GXStall;
+     for (;;) {
+         const u32 pc = pc_of();
+         if (pc == stop && arm.R[13] >= stop_sp) break;
++        // Interpreted code that reaches the entry of a recompiled (or hooked) function, by a call or a tail jump, runs
++        // that function's recompiled version, which also keeps the runtime's own replacements (thread switches, IRQ
++        // dispatch) in force; interpretation resumes where it returns (its entry LR).
++        if (!pure && pc != (target & ~1u)) {
++            if (const NtrFuncEntry* e = lookup(pc | ((arm.CPSR >> 5) & 1))) {
++                store();
++                const u32 back = cpu.r[14];
++                e->fn(&cpu);
++                if ((back & ~1u) == stop && cpu.r[13] >= stop_sp) {
++                    native_return = true;  // `cpu` already holds the state at the stop
++                    break;
++                }
++                load(back);
++                continue;
++            }
++        }
+         if ((arm.CPSR & 0x1F) != (ctrl & 0x1F) || pc >= 0xFFFF0000u) {
+             store();
+             dump_state();
+@@ -786,7 +808,7 @@
+         }
+     }
+     stat.steps += interp_steps_ - steps_before;  // unordered_map references stay valid across inserts
+-    store();
++    if (!native_return) store();
+ }
+ 
+ void RuntimeImpl::call_guest(u32 target) {

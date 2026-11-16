@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# M1a portability spike: V1-V3 and the synthetic cartridge on the targets without a local machine.
+# Windows x64 and Linux x64 also run locally (spike/m1a/build_windows.cmd ..., run_posix.sh).
+name: m1a
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-24.04 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies (the engine's Docker image list, tools/docker/linux.Dockerfile)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld ninja-build pkg-config python3-venv xvfb xauth \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxfixes-dev libxtst-dev \
+            libwayland-dev libxkbcommon-dev libegl-dev libgl-dev libdrm-dev libgbm-dev libasound2-dev libpulse-dev \
+            libudev-dev libdbus-1-dev libgl1-mesa-dri libglx-mesa0
+      - name: V1-V3 and the synthetic cartridge
+        run: xvfb-run -a bash spike/m1a/run_posix.sh "$HOME/m1a" 600 ${{ matrix.name }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1a-${{ matrix.name }}
+          path: spike/m1a/results/${{ matrix.name }}
+
+  macos:
+    name: macos-arm64
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: brew install ninja
+      - name: V1-V3 and the synthetic cartridge
+        run: bash spike/m1a/run_posix.sh "$HOME/m1a" 600 macos-arm64
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1a-macos-arm64
+          path: spike/m1a/results/macos-arm64
+
+  android:
+    name: android-arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+      - name: V1 (NDK compile + link) and the V2 test binary
+        run: bash spike/m1a/run_android.sh "$HOME/m1a" 28
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m1a-android-arm64
+          path: spike/m1a/results/android-arm64

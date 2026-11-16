@@ -1,0 +1,396 @@
+# Session 4: from power-on through the first minutes of play (session 3, early_gameplay.txt, up to frame 26,600),
+# out of Niko's house to the station, the first train ride (Alfonzo's final exam) to Castle Town, and an in-game save
+# there. About 14 min 38 s of game time (52,400 frames). Our own input data: no game data in this file.
+# Build: --functions ours --dsprot original (the game's own anti-piracy checks). With the default build (replacements)
+# the train's gearbox and whistle never appear and the run cannot get past the animals on the tracks
+# (docs/research/DSPROTECT_ORIGINAL_PATH.md, section 5).
+# Run it with a separate test save that does not exist yet (the game creates it), program defaults otherwise:
+#   st_native <rom> --module <st_game.dll> --save build/route/castle_town.sav --headless
+#     --script tests/rom/castle_town.txt --hashes <file> --shots <dir>
+# Then load it with tests/rom/castle_town_load.txt. "drag x1 y1 x2 y2 n" is a stylus stroke over n frames.
+
+# Power-on, new game, the prologue and first scene, the first minutes of play (from early_gameplay.txt)
+1000 press START                   # skip the opening
+1100 touch 128 120                 # touch the screen
+1850 touch 128 160                 # dismiss the message
+2000 touch 130 62                  # file 1
+2200 touch 190 176                 # OK
+2400 touch 202 110                 # "Is this what you want to name your character?" Yes
+2600 touch 202 110                 # "Do you hold the stylus in your right or left hand?" Right
+2800 touch 205 110                 # "You're right-handed?" Yes
+3150 touch 128 160                 # dismiss the message
+3400 touch 130 62                  # file 1 (now named, three hearts)
+3600 touch 128 118                 # Start
+3800 touch 130 91                  # Adventure: the new game starts
+12300 press A 4
+12540 press A 4
+12780 press A 4
+13020 press A 4
+13260 press A 4
+13500 press A 4
+13740 press A 4
+13980 press A 4
+14220 press A 4
+14460 press A 4
+14700 press A 4
+14940 press A 4
+15180 press A 4
+15420 press A 4
+15660 press A 4
+15900 press A 4
+16140 press A 4
+16380 press A 4
+16620 press A 4
+16860 press A 4
+17450 touch 204 109
+17700 press A 4
+17940 press A 4
+18180 press A 4
+18420 press A 4
+18660 press A 4
+18900 press A 4
+19140 press A 4
+19380 press A 4
+19800 press A 4
+20040 press A 4
+20280 press A 4
+20520 press A 4
+20750 touch 205 110
+20760 press A 4
+21000 press A 4
+21240 press A 4
+21480 press A 4
+21720 press A 4
+21960 press A 4
+22200 press A 4
+22440 press A 4
+22680 press A 4
+22920 press A 4
+23160 press A 4
+23400 press A 4
+23640 press A 4
+23880 press A 4
+24120 press A 4
+17450 touch 204 109  # 'Sort of.'
+20750 touch 205 110  # first answer of the second choice
+24400 touch 245 85 150  # right, to Niko
+24600 press A 4
+24800 touch 8 90 150  # left
+25000 touch 128 8 150  # up
+25200 touch 128 185 150  # down
+25400 press A 4
+25600 touch 245 140 150  # right, lower
+25800 touch 60 30 150  # up-left
+26000 touch 245 85 150  # right, to Niko
+26200 press A 4
+26400 touch 8 90 150  # left
+
+# Leave Niko's house: after the village fly-over (frames 26,000-26,700) Link stands at the door; step down, right, then north past the houses to the station
+26720 touch 128 185 50
+26780 touch 250 96 150
+26940 touch 128 4 100
+27040 touch 128 4 100
+27140 touch 128 4 100
+27240 touch 128 4 100
+27300 touch 250 150 100
+27400 touch 250 150 100
+27500 touch 200 4 100
+27600 touch 200 4 100
+27700 touch 200 4 100
+
+# At the station: Alfonzo ("You're late!"), the train comes out of the shed; dialogue dismissed by taps
+27850 touch 128 150 4
+27890 touch 128 150 4
+27930 touch 128 150 4
+27970 touch 128 150 4
+28010 touch 128 150 4
+28050 touch 128 150 4
+28090 touch 128 150 4
+28130 touch 128 150 4
+28170 touch 128 150 4
+28210 touch 128 150 4
+28250 touch 128 150 4
+28290 touch 128 150 4
+28330 touch 128 150 4
+28370 touch 128 150 4
+28410 touch 128 150 4
+28450 touch 128 150 4
+28490 touch 128 150 4
+28530 touch 128 150 4
+28570 touch 128 150 4
+28610 touch 128 150 4
+28650 touch 128 150 4
+28690 touch 128 150 4
+28730 touch 128 150 4
+28770 touch 128 150 4
+28810 touch 128 150 4
+28850 touch 128 150 4
+28890 touch 128 150 4
+28930 touch 128 150 4
+28970 touch 128 150 4
+29010 touch 128 150 4
+29050 touch 128 150 4
+29090 touch 128 150 4
+29130 touch 128 150 4
+29170 touch 128 150 4
+29210 touch 128 150 4
+29250 touch 128 150 4
+29290 touch 128 150 4
+29330 touch 128 150 4
+29370 touch 128 150 4
+29410 touch 128 150 4
+29450 touch 128 150 4
+
+# On the platform: touch Alfonzo to talk; "Now hop aboard!" Yeah!
+29500 touch 62 50 4
+29540 touch 62 50 4
+29580 touch 62 50 4
+29620 touch 62 50 4
+29660 touch 62 50 4
+29700 touch 62 50 4
+29740 touch 62 50 4
+29780 touch 62 50 4
+29820 touch 62 50 4
+29860 touch 62 50 4
+29900 touch 62 50 4
+29940 touch 62 50 4
+30000 touch 205 92 4
+
+# The final exam's briefing (300 seconds to the castle); "So think you got it?" Yes!
+30060 touch 128 150 4
+30100 touch 128 150 4
+30140 touch 128 150 4
+30180 touch 128 150 4
+30220 touch 128 150 4
+30260 touch 128 150 4
+30300 touch 128 150 4
+30340 touch 128 150 4
+30380 touch 128 150 4
+30420 touch 128 150 4
+30460 touch 128 150 4
+30500 touch 128 150 4
+30540 touch 128 150 4
+30580 touch 128 150 4
+30620 touch 128 150 4
+30660 touch 128 150 4
+30700 touch 128 150 4
+30740 touch 128 150 4
+30800 touch 205 92 4
+
+# The train leaves Aboda; Alfonzo explains the gearbox and the whistle; "So, you catch all that?" Yes.
+30860 touch 128 150 4
+30900 touch 128 150 4
+30940 touch 128 150 4
+30980 touch 128 150 4
+31020 touch 128 150 4
+31060 touch 128 150 4
+31100 touch 128 150 4
+31140 touch 128 150 4
+31180 touch 128 150 4
+31220 touch 128 150 4
+31260 touch 128 150 4
+31300 touch 128 150 4
+31340 touch 128 150 4
+31380 touch 128 150 4
+31420 touch 128 150 4
+31460 touch 128 150 4
+31500 touch 128 150 4
+31540 touch 128 150 4
+31580 touch 128 150 4
+31620 touch 128 150 4
+31660 touch 128 150 4
+31700 touch 128 150 4
+31740 touch 128 150 4
+31780 touch 128 150 4
+31820 touch 128 150 4
+31860 touch 128 150 4
+31900 touch 128 150 4
+31940 touch 128 150 4
+31980 touch 128 150 4
+32020 touch 128 150 4
+32060 touch 128 150 4
+32100 touch 128 150 4
+32140 touch 128 150 4
+32180 touch 128 150 4
+32220 touch 128 150 4
+32260 touch 128 150 4
+32300 touch 128 150 4
+32340 touch 128 150 4
+32380 touch 128 150 4
+32420 touch 128 150 4
+32460 touch 128 150 4
+32500 touch 128 150 4
+32540 touch 128 150 4
+32580 touch 128 150 4
+32620 touch 128 150 4
+32660 touch 128 150 4
+32700 touch 128 150 4
+32740 touch 128 150 4
+32780 touch 128 150 4
+32820 touch 128 150 4
+32860 touch 128 150 4
+32900 touch 128 150 4
+32940 touch 128 150 4
+32980 touch 128 150 4
+33020 touch 128 150 4
+33060 touch 128 150 4
+33100 touch 128 150 4
+33140 touch 128 150 4
+33180 touch 128 150 4
+33220 touch 128 150 4
+33260 touch 128 150 4
+33300 touch 128 150 4
+33340 touch 128 150 4
+33440 touch 205 92 6
+33500 touch 205 92 6
+
+# "Now set the gearbox lever to full speed": drag the handle (right edge) up
+33560 touch 128 150 4
+33620 touch 128 150 4
+33700 drag 245 103 245 70 20
+33760 drag 245 103 245 70 20
+
+# Animal on the tracks: pull the whistle rope (top right) down, and the gearbox back up when the train has stopped
+36100 drag 232 38 232 100 20
+36175 drag 239 122 239 72 20
+36250 drag 232 38 232 100 20
+36325 drag 239 122 239 72 20
+36400 drag 232 38 232 100 20
+36475 drag 239 122 239 72 20
+36550 drag 232 38 232 100 20
+36625 drag 239 122 239 72 20
+36700 drag 232 38 232 100 20
+36775 drag 239 122 239 72 20
+36850 drag 232 38 232 100 20
+36925 drag 239 122 239 72 20
+37000 drag 232 38 232 100 20
+37075 drag 239 122 239 72 20
+37150 drag 232 38 232 100 20
+37225 drag 239 122 239 72 20
+37300 drag 232 38 232 100 20
+37375 drag 239 122 239 72 20
+37450 drag 232 38 232 100 20
+37525 drag 239 122 239 72 20
+37600 drag 232 38 232 100 20
+37675 drag 239 122 239 72 20
+
+# The first fork: the rail switch tutorial ("Got it?" Yep.), then slide the switch handle (bottom) to the right
+37760 touch 128 150 4
+37800 touch 128 150 4
+37840 touch 128 150 4
+37880 touch 128 150 4
+37920 touch 128 150 4
+37960 touch 128 150 4
+38000 touch 128 150 4
+38040 touch 128 150 4
+38080 touch 128 150 4
+38120 touch 128 150 4
+38160 touch 128 150 4
+38200 touch 128 150 4
+38240 touch 128 150 4
+38280 touch 128 150 4
+38320 touch 128 150 4
+38450 touch 205 92 6
+38510 touch 205 92 6
+38580 touch 128 150 4
+38620 touch 128 150 4
+38660 touch 128 150 4
+38700 touch 128 150 4
+38740 touch 128 150 4
+38800 drag 108 165 150 165 16
+38880 touch 147 180 6
+38950 drag 108 165 150 165 16
+
+# The Tower of Spirits comes into view (cutscene); "Use the lever on the gearbox to stop at the station!"
+46900 touch 128 150 4
+46940 touch 128 150 4
+46980 touch 128 150 4
+47020 touch 128 150 4
+47060 touch 128 150 4
+47100 touch 128 150 4
+47140 touch 128 150 4
+47180 touch 128 150 4
+47220 touch 128 150 4
+47260 touch 128 150 4
+47300 touch 128 150 4
+47340 touch 128 150 4
+47380 touch 128 150 4
+47420 touch 128 150 4
+47460 touch 128 150 4
+47500 touch 128 150 4
+47540 touch 128 150 4
+47580 touch 128 150 4
+47620 touch 128 150 4
+47660 touch 128 150 4
+47700 touch 128 150 4
+47740 touch 128 150 4
+47780 touch 128 150 4
+47820 touch 128 150 4
+47860 touch 128 150 4
+
+# Stop at the castle's station: gearbox to neutral (any start from frame 48,450 to 48,520 stops in the station)
+48490 drag 240 80 240 122 20
+48530 drag 240 98 240 122 20
+
+# "Good job! You passed the exam"; Castle Town; Alfonzo's last words ("It's to the north")
+49700 touch 128 150 4
+49740 touch 128 150 4
+49780 touch 128 150 4
+49820 touch 128 150 4
+49860 touch 128 150 4
+49900 touch 128 150 4
+49940 touch 128 150 4
+49980 touch 128 150 4
+50020 touch 128 150 4
+50060 touch 128 150 4
+50100 touch 128 150 4
+50140 touch 128 150 4
+50180 touch 128 150 4
+50220 touch 128 150 4
+50260 touch 128 150 4
+50300 touch 128 150 4
+50340 touch 128 150 4
+50380 touch 128 150 4
+50420 touch 128 150 4
+50460 touch 128 150 4
+50500 touch 128 150 4
+50540 touch 128 150 4
+50580 touch 128 150 4
+50620 touch 128 150 4
+50660 touch 128 150 4
+50700 touch 128 150 4
+50740 touch 128 150 4
+50780 touch 128 150 4
+50820 touch 128 150 4
+50860 touch 128 150 4
+50900 touch 128 150 4
+50940 touch 128 150 4
+50980 touch 128 150 4
+51020 touch 128 150 4
+51060 touch 128 150 4
+51300 touch 128 150 4
+
+# Save: Menu (bottom right), Save (bottom left), "Save your progress?" Yes; "Save complete." dismissed
+51450 touch 226 180 6
+51650 touch 28 173 6
+51800 touch 202 109 6
+52300 touch 128 150 4
+
+# Checkpoints
+26700 shot 04_outside_niko_house
+27900 shot 05_station_youre_late
+29600 shot 06_platform_alfonzo
+31800 shot 07_train_leaves_aboda
+33680 shot 08_train_gearbox
+36300 shot 09_animal_on_tracks
+38400 shot 10_rail_switch
+39300 shot 11_after_the_fork
+46900 shot 12_tower_of_spirits
+48700 shot 13_castle_station
+49640 shot 14_exam_passed
+49960 shot 15_castle_town
+51600 shot 16_menu
+51780 shot 17_save_prompt
+52260 shot 18_save_complete
+52400 shot 19_after_save
+52400 quit

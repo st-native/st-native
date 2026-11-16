@@ -1,0 +1,4 @@
+# Code regions for Spirit Tracks, USA/Australia revision 0 (BKIE): code an overlay carries and copies to another address
+# at run time. Format (the engine's): <name> <carrying module> <source address> <size> <run address> [interpret].
+# None known yet. The ITCM and DTCM autoload blocks are separate modules in functions.txt. Code that is copied at run
+# time and has no entry here runs on the fallback interpreter (shown by --perf / interp_steps).

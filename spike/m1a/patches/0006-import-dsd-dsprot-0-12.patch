@@ -1,0 +1,13 @@
+diff --git a/tools/import_dsd.py b/tools/import_dsd.py
+--- a/tools/import_dsd.py
++++ b/tools/import_dsd.py
+@@ -39,7 +39,8 @@
+         mode = "a" if props.startswith("arm") else "t"
+         size_m = re.search(r"size=0x([0-9a-fA-F]+)", props)
+         size = int(size_m.group(1), 16) if size_m else 0
+-        flags = ["!dsprot"] if "dsprot_range" in props else []
++        # dsd 0.12 writes the encrypted range as "dsprot=0x68" or "dsprot=(0xac,0x2e8b)"; older versions "dsprot_range"
++        flags = ["!dsprot"] if "dsprot_range" in props or re.search(r"\bdsprot=", props) else []
+         name = m.group("name")
+         out.append((int(m.group("addr"), 16), size, mode, "" if AUTO_NAME_RE.match(name) else name, flags))
+     out.sort()

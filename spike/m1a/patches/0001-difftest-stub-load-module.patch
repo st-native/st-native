@@ -1,0 +1,33 @@
+diff --git a/tests/difftest/stub.c b/tests/difftest/stub.c
+index bc8e9fe..7afb3cd 100644
+--- a/tests/difftest/stub.c
++++ b/tests/difftest/stub.c
+@@ -97,7 +97,28 @@ void ntr_undefined(NtrCpu* c, uint32_t pc, uint32_t opcode) { g_errors++; }
+ void ntr_bad_jump(NtrCpu* c, uint32_t pc, uint32_t target) { g_errors++; }
+ void ntr_unimplemented(NtrCpu* c, uint32_t addr) { g_errors++; }
+ 
++/* The generated code is a game module (funcs.h defines NTR_GAME_MODULE): it reaches the services above through the
++ * ntr_host table, which only ntr_game_load fills. Load the module once, with this stub as its host. */
++const NtrGameInfo* ntr_game_load(const NtrHostApi* api);
++static void* dt_find_hook(const char* name) { (void)name; return NULL; }
++static int dt_load_module(void) {
++    static int loaded;
++    if (!loaded) {
++        NtrHostApi api;
++        memset(&api, 0, sizeof api);
++        api.abi = NTR_ABI_VERSION;
++        api.size = sizeof api;
++#define DT_SERVICE(ret, name, args) api.name = ntr_##name;
++        NTR_RUNTIME_SERVICES(DT_SERVICE)
++#undef DT_SERVICE
++        api.find_hook = dt_find_hook;
++        loaded = ntr_game_load(&api) != NULL;
++    }
++    return loaded;
++}
++
+ EXPORT void dt_set_code(const uint8_t* code, uint32_t base, uint32_t size) {
++    if (!dt_load_module()) g_errors++;
+     g_code = code;
+     g_code_base = base;
+     g_code_size = size;

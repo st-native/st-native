@@ -1,0 +1,3 @@
+# Our own binaries that the game-data guard (tools/check_no_game_data.py) would otherwise block: "<sha1> <path>".
+# Never add anything derived from the game.
+faacbe2826041d1d0029943793127d08505a661f spike/m1a/fixtures/zpoc_synthetic.rom   # our synthetic cartridge (poc/sample), NDS header with logo checksum only
