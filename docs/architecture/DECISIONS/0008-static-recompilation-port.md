@@ -45,9 +45,10 @@ things:
   ([ENHANCEMENTS.md](../../design/ENHANCEMENTS.md) lists which is which).
 - **Platforms.** Every target needs a compiler on the player's device (ADR-0002's per-platform toolchain table);
   Windows x64 first.
-- **The anti-piracy routines.** The build must not decrypt them and should preserve the game's original checks if the
-  runtime can run them; the runtime now runs them (patches 0008/0009) and the boot reaches a new game; the default still replaces the six entry points as in the engine's FFCC config until counsel answers Q4/Q14
-  ([DSPROTECT_ORIGINAL_PATH.md](../../research/DSPROTECT_ORIGINAL_PATH.md)).
+- **The anti-piracy routines.** The Windows developer launcher explicitly uses `--functions ours --dsprot original`.
+  Our extractor keeps the protected code as stored, and the game runs its own checks during play (patches 0008/0009).
+  The legacy command-line defaults remain available for reference runs. See
+  [DSPROTECT_ORIGINAL_PATH.md](../../research/DSPROTECT_ORIGINAL_PATH.md) for test coverage and open questions Q4/Q14.
 - **Legal profile.** The published material contains no game code or data; the remaining questions (anti-circumvention,
   facts files, engine built for one game) go to counsel before publication.
 - **Verification** stays per build (identical modules from clean folders) and per run (identical per-frame state

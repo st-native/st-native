@@ -23,10 +23,10 @@ Keep them to yourself: never commit, upload or share them.
 | Visual Studio 2022 Build Tools, workload "Desktop development with C++" (Windows SDK, and the Ninja it bundles) | MSVC 19.44, Windows SDK 10.0.26100 |
 | LLVM, installed at `C:\Program Files\LLVM` (clang-cl, lld-link) | 22.1.8 |
 | CMake ≥ 3.28, Git, Python ≥ 3.11 | CMake 4.4.2, Git 2.53, Python 3.14.3 |
-| Internet access, the first time | step 2 downloads dsd; step 3 clones the engine and its dependencies (melonDS, SDL3, FreeType, RmlUi) at pinned revisions |
+| Internet access, the first time | Step 2 installs Capstone and step 3 fetches the engine and its dependencies at pinned revisions |
 | Disk | about 3 GB for the engine build, 220 MB per module build folder |
 
-## 2. Python and dsd (once)
+## 2. Python dependencies (once)
 
 In the project folder (`cmd` or PowerShell):
 
@@ -34,11 +34,18 @@ In the project folder (`cmd` or PowerShell):
 python -m venv .venv
 ```
 ```bash
+.venv\Scripts\python -m pip install capstone==5.0.7
+```
+
+The launcher uses Capstone for our function discovery. For the historical `--functions dsd` comparison builds,
+you can additionally install dsd:
+
+```bash
 .venv\Scripts\python poc\fetch_tools.py --only dsd
 ```
 
 This puts [dsd](https://github.com/AetiasHax/ds-decomp) 0.12.1 (MIT) in `.tools\dsd-v0.12.1\`; the build checks its
-SHA-256. The build steps themselves need only Python's standard library.
+SHA-256.
 
 ## 3. The program (no ROM needed)
 
@@ -49,45 +56,79 @@ tools\build\build_program.cmd
 The script:
 
 1. clones the engine (FFCCEOT-Recomp) at the commit in `spike\m1a\deps.lock.json` into `.tools\upstream\ffcc`;
-2. checks melonDS's revision and applies our patches (`spike\m1a\patches\0001`–`0006`);
-3. configures the engine's `release` preset (Ninja, clang-cl, lld-link) with our programs added, and builds three of
-   them into `.tools\upstream\ffcc\build\release\`:
+2. checks melonDS's revision and applies our patches (`spike\m1a\patches\`);
+3. configures the engine's `release` preset (Ninja, clang-cl, lld-link) and builds the programs into
+   `.tools\upstream\ffcc\build\release\`:
    - `recompiler\ntr-recomp.exe`, the recompiler;
    - `st_native.exe`, the program;
+   - `st_launcher.exe`, the SDL3 / RmlUi launcher;
    - `ntr_run.exe`, the headless host for the synthetic cartridge.
 
 From a fresh clone this took 131 s on the validation PC. `tools\build\build_program.cmd --tests` also builds
 everything else and runs the engine's unit tests: 10 tests, including a UI smoke test that opens a window for a few
 seconds.
 
-## 4. The game module (from your ROM)
+### Play with the Windows developer launcher
+
+After steps 2 and 3, open `.tools\upstream\ffcc\build\release\st_launcher.exe` directly. You can also use
+[Launch.cmd](../Launch.cmd) or create a Windows shortcut to the executable. Choose your `.nds` file using **Browse…**.
+The launcher verifies its SHA-1 and enables **Play** for the supported USA/Australia revision 0 dump. The window
+can be resized or maximized. Settings move below the ROM controls in a narrow window. Display mode, game window
+scale and game language are saved for the next launch. **Link** is the suggested name on the game's new-save
+screen. On that screen, type with the PC keyboard, use **Backspace** to delete, or select the whole name with
+**Ctrl+A**. The first typed character replaces the suggested name. Click the game's **OK** to confirm.
+
+**Play** prepares the module on the first run using `--functions ours --dsprot original`. Our build keeps the
+protected code as stored in the ROM, and the game executes its own checks at runtime. Later launches verify the
+ROM and reuse the locally cached module when the ROM, game configuration, recompiler, module ABI and toolchain match.
+The **Compilation** section shows how many builds are cached and how much disk space they use. During a build,
+the progress bar counts completed stages out of six. The live status shows elapsed time, the discovery pass and
+its scan counts, and the count of C files compiled. **Show steps** expands the timing history and **Open log**
+opens the latest build log. The individual phase logs and timing file are kept beside it when compilation succeeds.
+
+**Compile** or **Recompile** builds a fresh module without launching the game, even when one is cached. A build
+replaces its previous module after it finishes successfully. **Remove cache…** clears launcher-built modules
+after confirmation. The ROM, save files, settings and build logs are stored separately.
+
+The game opens in the same window. **Esc** and **F1** open the same
+pause menu, where you can resume, change display mode or return to the launcher. **F11** switches between
+windowed and fullscreen play directly. Preparation failures point to their log under
+`build/launcher/runs/`. Logs and cached modules are local game-derived artifacts.
+
+This alpha runs from the source checkout with OpenGL 3.3 and the installed Python, Visual Studio Build Tools
+and LLVM. Packaging the toolchain for a standalone distribution is part of [ADR-0002](architecture/DECISIONS/0002-distribution-model.md).
+
+Developers can check the launcher at four sizes, verify scrolling and overlapping controls, and test file rejection
+with `st_launcher.exe --smoke-test`, without a ROM. Pass an existing output directory after `--smoke-test` to save
+previews of the empty launcher in desktop and narrow layouts. To exercise preparation and cache reuse directly, run
+`.venv\Scripts\python -I platform\windows\launcher.py --rom "C:\path\to\your\Spirit Tracks.nds" --prepare-only`.
+Use `st_launcher.exe --game-smoke <rom>` to test module preparation or reuse, then open and close the pause menu
+with both shortcuts in windowed and fullscreen sessions and verify that the launcher redraws in the same window.
+The test keeps the blank save in memory.
+
+## 4. The game module (command line)
+
+To build the same module configuration as the launcher:
 
 ```bash
-tools\build\st_build.cmd "C:\path\to\your\Spirit Tracks.nds" build\st
+tools\build\st_build.cmd "C:\path\to\your\Spirit Tracks.nds" build\st --functions ours --dsprot original
 ```
 
 The output folder must be new or empty. The build takes 75–120 s and writes everything into `build\st\`:
 
 1. **Checks the dump** (SHA-1).
-2. **Runs dsd's analysis.** dsd extracts the ROM, then `dsd init` writes the function lists. The extraction is deleted
-   at once. It contains every game file, and dsd decrypts the anti-piracy routines while extracting (legal question
-   Q14 is open). Only dsd's function lists are kept.
-3. **Writes `config\`:**
-   - `functions.txt`, from dsd's lists by the engine's `tools/import_dsd.py`;
-   - our `hooks.txt` and `regions.txt`, from `game\st\config\bkie\`.
+2. **Runs our extractor and function discovery** on the local ROM.
+3. **Writes `config\`** from that discovery and the project's configuration for game code `BKIE`.
 4. **Recompiles the ARM9 code to C** (`gen\`, about 100 MB), and writes `recomp_report.txt`.
 5. **Compiles and links the module** `st_game.dll` (about 49 MB) with the engine's game-module flags, plus `/Brepro`.
 6. **Writes `manifest.txt`,** the SHA-256 of every artifact.
 
-### Experimental build options
+### Compare with historical builds
 
-- `--functions ours`: the function list comes from our own extractor and discovery instead of dsd, so nothing is
-  decrypted (dsd's extractor decrypts the anti-piracy routines as a side effect). Boots to the new game; the
-  functions it still lacks run on the interpreter (slower, other timing).
-- `--dsprot original`: runs the game's own anti-piracy checks on the runtime's interpreter instead of replacing them.
-  Reaches the new game like the default build (patches 0008/0009), and is **needed past the first train ride**: with
-  the replacements the game removes the train's controls. With `--functions ours`, it plays from power-on to Castle
-  Town, saves and reloads (`tests/rom/castle_town.txt`, [DSPROTECT_ORIGINAL_PATH.md](research/DSPROTECT_ORIGINAL_PATH.md) §5).
+The legacy command-line defaults (`dsd` and `noop`) reproduce the M1b reference. dsd decrypts the checks as a side
+effect of extraction, and `noop` can cause the game to remove the train's controls. The launcher uses our
+function list and runs the game's original checks. This combination was verified through the first train ride
+to Castle Town and a save and reload there. See [DSPROTECT_ORIGINAL_PATH.md](research/DSPROTECT_ORIGINAL_PATH.md) §5.
 
 ## 5. Play: from the title screen to a new game
 
@@ -114,8 +155,9 @@ run in §6.
 3. **"Creating a save file..."** The first time only, this takes about 6 seconds. Then "File created.": click the
    message.
 4. **Select File**, with two slots showing "New Game!". Click slot **1**.
-5. **Name keyboard.** The console's name is filled in: type your own on the on-screen keyboard if you like, then click
-   **OK**. Click **Yes** to "Is this what you want to name your character?".
+5. **Name keyboard.** Keep Link or edit the name and click **OK**. Click **Yes** to "Is this what you want to name
+   your character?". The launcher forwards physical typing to the game's editor on this screen. The CLI option
+   `--player-name <name>` sets the suggested name for replays. Use `--player-name melonDS` for older replay hashes.
 6. **Stylus hand.** Click **Right** (or Left), then **Yes**.
 7. **"Saving..."**, then "Save complete.": click the message.
 8. **Select File** again. Slot 1 now has your name and three hearts: click it, then click **Start**.

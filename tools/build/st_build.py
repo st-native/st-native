@@ -44,6 +44,7 @@ KNOWN = {  # SHA-1 of the whole dump -> (game code, release)
 CFLAGS = ["/nologo", "/c", "/w", "/GS-", "/Zl", "/O1", "/Brepro", "-DNTR_GAME_MODULE=1"]
 LDFLAGS = ["/nologo", "/dll", "/noentry", "/nodefaultlib", "/machine:x64", "/Brepro"]
 STAGES = ["dsd", "config", "gen", "report", "obj", "module"]
+TOOL_PROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
 def sha256(path: Path) -> str:
@@ -55,22 +56,43 @@ def sha256(path: Path) -> str:
 
 
 class Pipeline:
-    def __init__(self, out: Path):
+    def __init__(self, out: Path, progress: bool):
         self.out = out
+        self.progress = progress
         self.logs = out / "logs"
         self.logs.mkdir(parents=True, exist_ok=True)
         self.times: list[tuple[str, float]] = []
 
-    def run(self, name: str, cmd: list, **kw) -> None:
+    def announce(self, kind: str, detail: str) -> None:
+        if self.progress:
+            print(f"{kind} {detail}", flush=True)
+
+    def run(self, name: str, cmd: list, *, stream_progress: bool = False, **kw) -> None:
         t0 = time.monotonic()
+        self.announce("BEGIN", name)
         with open(self.logs / f"{name}.log", "w", encoding="utf-8", newline="\n") as log:
             log.write("$ " + " ".join(str(c) for c in cmd) + "\n")
             log.flush()
-            rc = subprocess.run([str(c) for c in cmd], stdout=log, stderr=subprocess.STDOUT, **kw).returncode
-        self.times.append((name, time.monotonic() - t0))
+            argv = [str(c) for c in cmd]
+            if stream_progress:
+                argv.append("--progress")
+                with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding="utf-8", errors="replace",
+                                      creationflags=TOOL_PROCESS_FLAGS, **kw) as child:
+                    for line in child.stdout:
+                        log.write(line)
+                        if line.startswith("SCAN "):
+                            self.announce("SCAN", line[5:].rstrip())
+                    rc = child.wait()
+            else:
+                rc = subprocess.run(argv, stdout=log, stderr=subprocess.STDOUT,
+                                    creationflags=TOOL_PROCESS_FLAGS, **kw).returncode
+        elapsed = time.monotonic() - t0
+        self.times.append((name, elapsed))
         if rc != 0:
             sys.exit(f"step '{name}' failed (exit {rc}); see {self.logs / (name + '.log')}")
-        print(f"  {name}: {time.monotonic() - t0:.1f} s")
+        print(f"  {name}: {elapsed:.1f} s")
+        self.announce("END", f"{name} {elapsed:.1f}")
 
 
 def main() -> int:
@@ -79,6 +101,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True, help="a new or empty folder")
     ap.add_argument("--recomp", type=Path, default=ENGINE / "build" / "release" / "recompiler" / "ntr-recomp.exe")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    ap.add_argument("--progress", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--extra-hooks", type=Path, action="append", default=[],
                     help="hooks appended to game/st/config/<code>/hooks.txt for this build (R4 instrumentation and "
                          "replacements); may be given more than once")
@@ -115,7 +138,7 @@ def main() -> int:
         sys.exit(f"{a.rom}: SHA-1 {sha1} is not a known Spirit Tracks dump (docs/BUILDING.md lists them)")
     code, release = KNOWN[sha1]
     print(f"ROM: {release} ({code}), SHA-1 {sha1}")
-    p = Pipeline(out)
+    p = Pipeline(out, a.progress)
     work = out / "work"
 
     # 2-3. the function list, then the config
@@ -142,7 +165,7 @@ def main() -> int:
               cwd=ROOT)
         (work / "analysis").mkdir(parents=True)
         p.run("discover", [sys.executable, "-m", "tools.re.discover", work / "extract", "--out",
-                           work / "analysis" / "functions.json"], cwd=ROOT)
+                           work / "analysis" / "functions.json"], cwd=ROOT, stream_progress=a.progress)
         # Static initialisers: each overlay's sinit table lists functions the overlay loader calls through pointers
         # (dsd names them __sinit_*); add any our discovery missed, or they run on the interpreter.
         manifest = json.loads((work / "extract" / "manifest.json").read_text(encoding="utf-8"))
@@ -264,28 +287,35 @@ def main() -> int:
 
     def compile_one(src: Path) -> tuple[Path, int, str]:
         r = subprocess.run(["clang-cl", *CFLAGS, *inc, str(src), f"/Fo{obj / (src.stem + '.obj')}"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, creationflags=TOOL_PROCESS_FLAGS)
         return src, r.returncode, r.stdout + r.stderr
 
     failed = []
+    p.announce("BEGIN", "compile")
+    p.announce("COMPILE", f"0 {len(sources)}")
     with open(p.logs / "compile.log", "w", encoding="utf-8", newline="\n") as log:
         log.write(f"clang-cl {' '.join(CFLAGS + inc)} <source> /Fo<obj>  ({len(sources)} sources, {a.jobs} jobs)\n")
         with concurrent.futures.ThreadPoolExecutor(a.jobs) as pool:
-            for src, rc, msg in pool.map(compile_one, sources):
+            for done, (src, rc, msg) in enumerate(pool.map(compile_one, sources), 1):
                 if msg.strip():
                     log.write(f"--- {src.name}\n{msg}")
                 if rc:
                     failed.append(src.name)
+                if done % 4 == 0 or done == len(sources):
+                    p.announce("COMPILE", f"{done} {len(sources)}")
     p.times.append(("compile", time.monotonic() - t1))
     print(f"  compile: {time.monotonic() - t1:.1f} s ({len(sources)} files)")
     if failed:
         sys.exit(f"{len(failed)} files failed to compile, e.g. {failed[:3]}; see {p.logs / 'compile.log'}")
+    p.announce("END", f"compile {p.times[-1][1]:.1f}")
     objs = [obj / (s.stem + ".obj") for s in sources]
     rsp = out / "link.rsp"
     rsp.write_text("\n".join(f'"{o}"' for o in objs) + "\n", encoding="utf-8", newline="\n")
     p.run("link", ["lld-link", *LDFLAGS, f"/out:{out / 'st_game.dll'}", f"@{rsp}"])
 
     # 6. manifest
+    t2 = time.monotonic()
+    p.announce("BEGIN", "manifest")
     groups = {
         "dsd": sorted(f for d in ("dsd", "analysis") for f in (work / d).rglob("*") if f.is_file()),
         "config": sorted(cfg.iterdir()),
@@ -299,6 +329,7 @@ def main() -> int:
         for f in groups[stage]:
             lines.append(f"{stage} {sha256(f)} {f.relative_to(out).as_posix()}\n")
     (out / "manifest.txt").write_text("".join(lines), encoding="utf-8", newline="\n")
+    p.announce("END", f"manifest {time.monotonic() - t2:.1f}")
     with open(out / "timings.txt", "w", encoding="utf-8", newline="\n") as t:
         for name, s in p.times:
             t.write(f"{name} {s:.1f}\n")

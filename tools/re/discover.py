@@ -25,6 +25,7 @@ import json
 import re
 import struct
 import sys
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -106,8 +107,12 @@ class Function:
 
 
 class Discovery:
-    def __init__(self, modules: list[Module]):
+    def __init__(self, modules: list[Module], progress: Callable[[int, str, int, int], None] | None = None):
         self.modules = {m.name: m for m in modules}
+        # An overlay can refer to itself or static code. Preserve module order when static ranges overlap.
+        self.static_modules = tuple(m for m in self.modules.values() if m.name in ("arm9", "itcm"))
+        self.progress = progress
+        self.round = 0
         self.funcs: dict[tuple[str, int], Function] = {}
         self.code = {m.name: Marks(m.base, len(m.data)) for m in modules}   # bytes decoded as instructions
         self.pools = {m.name: Marks(m.base, len(m.data)) for m in modules}  # bytes known to be data
@@ -119,6 +124,10 @@ class Discovery:
         for k in range(1, len(self.span_hi)):  # running max, so one bisect answers "inside any module?"
             self.span_hi[k] = max(self.span_hi[k], self.span_hi[k - 1])
 
+    def report(self, phase: str, done: int = 0, total: int = 0) -> None:
+        if self.progress is not None:
+            self.progress(self.round, phase, done, total)
+
     def in_any_module(self, a: int) -> bool:
         k = bisect.bisect_right(self.span_lo, a) - 1
         return k >= 0 and a < self.span_hi[k]
@@ -127,8 +136,8 @@ class Discovery:
         m = self.modules[prefer]
         if m.contains(addr):
             return m
-        for m in self.modules.values():
-            if m.contains(addr) and m.name in ("arm9", "itcm"):  # overlays call static code, not each other
+        for m in self.static_modules:
+            if m.contains(addr):
                 return m
         return None
 
@@ -336,13 +345,22 @@ class Discovery:
 
     # ---- passes ------------------------------------------------------------------------------------------------
     def drain(self) -> None:
+        checked = 0
+        if self.queue:
+            self.report("candidates")
         while self.queue:
+            if self.progress is not None:
+                checked += 1
+                if checked % 256 == 0:
+                    self.report("candidates", checked)
             name, addr, thumb, how = self.queue.pop()
             if (name, addr) in self.funcs:
                 continue
             f = self.analyze(self.modules[name], addr, thumb, how)
             if f is not None:
                 self.funcs[(name, addr)] = f
+        if checked % 256:
+            self.report("candidates", checked)
 
     def follows_flow_end(self, mod: Module, addr: int, thumb: bool) -> bool:
         """A function starts after code that cannot fall through (return, branch, jump), after data, or at the
@@ -391,7 +409,11 @@ class Discovery:
     def next_pass(self) -> int:
         """Functions of a module follow each other: try the first unclaimed address after each known function."""
         added = 0
-        for (name, a), f in list(self.funcs.items()):
+        known = list(self.funcs.items())
+        self.report("adjacent", 0, len(known))
+        for index, ((name, a), f) in enumerate(known):
+            if index and index % 512 == 0:
+                self.report("adjacent", index, len(known))
             mod = self.modules[name]
             nxt = a + f.size
             nxt += (-nxt) % (2 if f.thumb else 4)
@@ -417,6 +439,7 @@ class Discovery:
                         self.has_matching_epilogue(mod, cand, other):
                     self.seed(name, cand, other, "next")
                     added += 1
+        self.report("adjacent", len(known), len(known))
         return added
 
     def has_matching_epilogue(self, mod: Module, a: int, thumb: bool, limit: int = 4096) -> bool:
@@ -455,7 +478,9 @@ class Discovery:
 
     def pointer_pass(self) -> int:
         added = 0
-        for mod in self.modules.values():
+        total = len(self.modules)
+        self.report("pointers", 0, total)
+        for index, mod in enumerate(self.modules.values(), 1):
             for off in range(0, len(mod.data) - 3, 4):
                 a = mod.base + off
                 if a in self.code[mod.name]:
@@ -473,6 +498,8 @@ class Discovery:
                 elif self.in_pointer_table(mod, a) and self.looks_like_function(tm, target, thumb, False):
                     self.seed(tm.name, target, thumb, "table")  # leaf function (no prologue) in a pointer table
                     added += 1
+            if index % 4 == 0 or index == total:
+                self.report("pointers", index, total)
         return added
 
     # prologues: ARM stmdb sp!, {.., lr} (word & 0xFFFF4000 == 0xE92D4000); Thumb push {.., lr} (0xB5xx)
@@ -481,7 +508,9 @@ class Discovery:
 
     def gap_pass(self) -> int:
         added = 0
-        for mod in self.modules.values():
+        total = len(self.modules)
+        self.report("gaps", 0, total)
+        for index, mod in enumerate(self.modules.values(), 1):
             code, pools = self.code[mod.name], self.pools[mod.name]
             # mode of a gap: the mode of the closest discovered function before it
             starts = sorted((a, f.thumb) for (n, a), f in self.funcs.items() if n == mod.name)
@@ -500,12 +529,16 @@ class Discovery:
                 if self.looks_like_function(mod, a, thumb):
                     self.seed(mod.name, a, thumb, "gap")
                     added += 1
+            if index % 4 == 0 or index == total:
+                self.report("gaps", index, total)
         return added
 
     def run(self, entries: list[tuple[str, int, bool]]) -> list[Function]:
         for name, addr, thumb in entries:
             self.seed(name, addr, thumb, "entry")
+        self.round = 0
         while True:
+            self.round += 1
             self.drain()
             before = len(self.funcs)
             for p in (self.next_pass, self.pointer_pass, self.gap_pass):
@@ -534,9 +567,14 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("extract_dir")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--progress", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
     mods, entries, params = load_extract(Path(a.extract_dir))
-    disc = Discovery(mods)
+
+    def report(round_number: int, phase: str, done: int, total: int) -> None:
+        print(f"SCAN {round_number} {phase} {done} {total}", flush=True)
+
+    disc = Discovery(mods, report if a.progress else None)
     known_data(disc, params)
     funcs = disc.run(entries)
     out = Path(a.out or Path(a.extract_dir) / "functions.json")

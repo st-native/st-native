@@ -1,7 +1,7 @@
 @echo off
 rem SPDX-License-Identifier: GPL-3.0-or-later
 rem Windows x64: fetch the engine at its pinned revision with our patches (spike\m1a\deps.lock.json, patches\), then
-rem build the recompiler (ntr-recomp), the runtime and our programs (st_native, ntr_run) with the engine's "release"
+rem build the recompiler (ntr-recomp), the runtime and our programs with the engine's "release"
 rem preset (Ninja, clang-cl, lld-link). Needs no ROM.
 rem   tools\build\build_program.cmd [--tests]     (--tests: also build everything and run the engine's unit tests)
 setlocal
@@ -18,7 +18,7 @@ if not exist "%PY%" set PY=python
 "%PY%" -I "%ROOT%\spike\m1a\fetch_engine.py" --dest "%ENGINE%" || (echo fetch FAILED & exit /b 2)
 cd /d "%ENGINE%" || exit /b 2
 cmake --preset release "-DCMAKE_PROJECT_FFCCEOTRecomp_INCLUDE=%ROOT%\app\st_targets.cmake" || (echo configure FAILED & exit /b 3)
-cmake --build --preset release --target ntr-recomp st_native ntr_run || (echo build FAILED & exit /b 4)
+cmake --build --preset release --target ntr-recomp st_native st_launcher ntr_run || (echo build FAILED & exit /b 4)
 if /i "%~1"=="--tests" (
   cmake --build --preset release || (echo full build FAILED & exit /b 5)
   ctest --preset release || (echo unit tests FAILED & exit /b 6)
@@ -26,4 +26,5 @@ if /i "%~1"=="--tests" (
 echo.
 echo built: %ENGINE%\build\release\recompiler\ntr-recomp.exe
 echo        %ENGINE%\build\release\st_native.exe
+echo        %ENGINE%\build\release\st_launcher.exe
 echo        %ENGINE%\build\release\ntr_run.exe

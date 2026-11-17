@@ -9,6 +9,7 @@
 //     --save <file>          the cartridge save (default: st-native's folder in the user's application data, BKIE.sav)
 //     --no-save              start from a blank cartridge save and write nothing
 //     --scale <n>            initial window size, in multiples of 256x384 (default 2)
+//     --fullscreen           start in fullscreen (F11 switches modes while playing)
 //     --script <file>        scripted input (format below), on top of the keyboard, mouse and gamepad
 //     --headless             no window, no sound, no pacing: for scripted runs (needs --exit-after or a `quit` line)
 //     --exit-after <frames>  quit after this many frames
@@ -17,6 +18,7 @@
 //     --shots <dir>          where the script's `shot` lines write pictures of both screens (BMP); without it,
 //                            `shot` lines are ignored
 //     --language en|fr|es    the console's language, which the game plays in (default en)
+//     --player-name <name>   the proposed name when creating a new save (default Link)
 //     --counts <file>        write the call counters (game/st/hooks/st_probe.hpp): hooks named st_count_<addr>,
 //                            one line each, after the run
 //     --ram-dump <frame>:<file>  write the 4 MB main RAM after that frame (may be repeated)
@@ -39,6 +41,8 @@
 //     <frame> touch <x> <y> [<frames held, default 6>]       (bottom screen, 0-255 x 0-191)
 //     <frame> drag <x1> <y1> <x2> <y2> [<frames, default 6>] (a stylus stroke in a straight line)
 //     <frame> shot <name>
+//     <frame> type <text>                     (only while the save-name editor accepts input)
+//     <frame> backspace                       (same editor)
 //     <frame> quit
 //   Keys: A B X Y L R START SELECT UP DOWN LEFT RIGHT.
 // Keyboard: arrows = D-pad, X = A, Z = B, S = X, A = Y, Q = L, W = R, Enter = Start, Backspace = Select,
@@ -50,6 +54,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -67,8 +72,11 @@
 #include "ntr/recomp.h"
 #include "ntr/rom.hpp"
 #include "ntr/runtime.hpp"
+#include "game_session.hpp"
+#include "name_keyboard.hpp"
 #include "st_hooks.hpp"
 #include "st_probe.hpp"
+#include "utf8_path.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -80,7 +88,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr int kW = 256, kH = 192;
+constexpr int kW = st::ds_width, kH = st::ds_screen_height;
 constexpr uint64_t kFrameNs = 16'715'316;  // one DS frame: 560,190 cycles at 33.513982 MHz (59.8261 Hz)
 
 struct KnownDump {
@@ -94,10 +102,10 @@ constexpr KnownDump kKnown[] = {
 
 struct Options {
     fs::path rom, module, save, script, hashes, shots, counts, record, control;
-    std::string wireless_group;
+    std::string wireless_group, player_name = "Link";
     std::vector<std::pair<uint64_t, std::string>> ram_dumps;
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
-         trace_calls = false, slow_cart = false;
+         trace_calls = false, slow_cart = false, fullscreen = false;
     int scale = 2, cpu_speed = 4;
     uint64_t exit_after = 0;
     uint8_t language = 1;
@@ -108,7 +116,7 @@ enum : uint32_t { kA = 1, kB = 2, kSelect = 4, kStart = 8, kRight = 16, kLeft = 
                   kR = 256, kL = 512, kX = 1024, kY = 2048 };
 
 struct Step {
-    enum Kind { Press, Tap, Touch, Shot, Quit } kind;
+    enum Kind { Press, Tap, Touch, Shot, Type, EraseName, Quit } kind;
     uint64_t frame = 0, len = 6;
     uint32_t keys = 0;
     int x = 0, y = 0;
@@ -162,6 +170,11 @@ bool parse_step(std::string line, const std::string& where, Step& s, bool& blank
         } else if (verb == "shot") {
             s.kind = Step::Shot;
             if (!(ls >> s.name)) return error = where + "shot needs a name", false;
+        } else if (verb == "type") {
+            s.kind = Step::Type;
+            if (!std::getline(ls >> std::ws, s.name)) return error = where + "type needs text", false;
+        } else if (verb == "backspace") {
+            s.kind = Step::EraseName;
         } else if (verb == "quit") {
             s.kind = Step::Quit;
         } else {
@@ -232,9 +245,18 @@ struct Shared {
     std::atomic<uint32_t> held{0}, pressed{0};
     std::atomic<int> touch_x{0}, touch_y{0};
     std::atomic<bool> touching{false}, fast{false}, quit{false}, done{false};
+    std::mutex pause_mutex;
+    std::condition_variable pause_cv;
+    bool paused = false;
 };
 
-class StHost : public ntr::Host {
+void queue_name_text(st::NameKeyboard& keyboard, std::string_view text) {
+    const char* next = text.data();
+    size_t remaining = text.size();
+    while (remaining) keyboard.queue(SDL_StepUTF8(&next, &remaining));
+}
+
+class StHost : public st::NameHost {
 public:
     StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes)
         : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes) {}
@@ -245,6 +267,7 @@ public:
 
     bool on_frame(const ntr::Frame& f) override {
         ++frame_;
+        name_keyboard.finish_frame();
         if (save_dirty_ && frame_ >= save_written_at_ + kSaveQuiet) flush_save();
         interp_total_ += f.interp_steps;
         if (hashes_)  // frame, state hash (RAM + clock), instructions on the interpreter, RAM-only hash
@@ -279,12 +302,26 @@ public:
                 const fs::path p = o_.shots / (s.name + ".bmp");
                 if (!write_bmp(p, f.top, f.bottom)) std::fprintf(stderr, "cannot write %s\n", p.string().c_str());
                 else std::printf("frame %llu: shot %s\n", (unsigned long long)frame_, p.string().c_str());
+            } else if (s.kind == Step::Type && frame_ == s.frame) {
+                queue_name_text(name_keyboard, s.name);
+            } else if (s.kind == Step::EraseName && frame_ == s.frame) {
+                name_keyboard.queue(st::NameKeyboard::backspace);
             } else if (s.kind == Step::Quit && frame_ >= s.frame) {
                 return false;
             }
         }
         st::probe::current_frame = frame_ + 1;  // calls from now on happen while the next frame is emulated
         if (o_.exit_after && frame_ >= o_.exit_after) return false;
+        {
+            std::unique_lock lock(sh_.pause_mutex);
+            if (sh_.paused) {
+                rt_->set_buttons(0, 0);
+                rt_->release_touch();
+                touched_ = false;
+                sh_.pause_cv.wait(lock, [&] { return !sh_.paused; });
+                deadline_ = 0;
+            }
+        }
         if (sh_.quit) return false;
         pace();
         held |= sh_.held.load();
@@ -444,15 +481,26 @@ void* find_hook(const char* name) {
     return hook;
 }
 
-bool load_module(const fs::path& path, ntr::GameCode& code, std::string& error) {
+struct LoadedModule {
 #ifdef _WIN32
-    HMODULE lib = LoadLibraryW(fs::absolute(path).c_str());
-    if (!lib) return error = "cannot load " + path.string() + " (error " + std::to_string(GetLastError()) + ")", false;
-    auto entry = reinterpret_cast<NtrGameLoadFn>(reinterpret_cast<void*>(GetProcAddress(lib, NTR_GAME_LOAD_SYMBOL)));
+    HMODULE handle = nullptr;
+    ~LoadedModule() { if (handle) FreeLibrary(handle); }
 #else
-    void* lib = dlopen(fs::absolute(path).c_str(), RTLD_NOW | RTLD_LOCAL);
-    if (!lib) return error = "cannot load " + path.string(), false;
-    auto entry = reinterpret_cast<NtrGameLoadFn>(dlsym(lib, NTR_GAME_LOAD_SYMBOL));
+    void* handle = nullptr;
+    ~LoadedModule() { if (handle) dlclose(handle); }
+#endif
+};
+
+bool load_module(const fs::path& path, LoadedModule& library, ntr::GameCode& code, std::string& error) {
+#ifdef _WIN32
+    library.handle = LoadLibraryW(fs::absolute(path).c_str());
+    if (!library.handle) return error = "cannot load " + path_to_utf8(path) + " (error " + std::to_string(GetLastError()) + ")", false;
+    auto symbol = GetProcAddress(library.handle, NTR_GAME_LOAD_SYMBOL);
+    auto entry = reinterpret_cast<NtrGameLoadFn>(reinterpret_cast<void*>(symbol));
+#else
+    library.handle = dlopen(fs::absolute(path).c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!library.handle) return error = "cannot load " + path_to_utf8(path), false;
+    auto entry = reinterpret_cast<NtrGameLoadFn>(dlsym(library.handle, NTR_GAME_LOAD_SYMBOL));
 #endif
     if (!entry) return error = path.string() + " is not a game module", false;
     NtrHostApi api;
@@ -469,17 +517,19 @@ bool parse_args(int argc, char** argv, Options& o) {
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
-        if (a == "--module") o.module = next();
-        else if (a == "--save") o.save = next();
+        auto next_path = [&] { return path_from_utf8(next()); };
+        if (a == "--module") o.module = next_path();
+        else if (a == "--save") o.save = next_path();
         else if (a == "--no-save") o.no_save = true;
         else if (a == "--scale") o.scale = std::max(1, std::atoi(next().c_str()));
-        else if (a == "--script") o.script = next();
+        else if (a == "--fullscreen") o.fullscreen = true;
+        else if (a == "--script") o.script = next_path();
         else if (a == "--headless") o.headless = true;
         else if (a == "--exit-after") o.exit_after = std::strtoull(next().c_str(), nullptr, 10);
-        else if (a == "--hashes") o.hashes = next();
-        else if (a == "--shots") o.shots = next();
-        else if (a == "--counts") o.counts = next();
-        else if (a == "--record") o.record = next();
+        else if (a == "--hashes") o.hashes = next_path();
+        else if (a == "--shots") o.shots = next_path();
+        else if (a == "--counts") o.counts = next_path();
+        else if (a == "--record") o.record = next_path();
         else if (a == "--read-only-save") o.read_only_save = true;
         else if (a == "--ram-dump") {
             const std::string v = next();
@@ -497,11 +547,12 @@ bool parse_args(int argc, char** argv, Options& o) {
         }
         else if (a == "--slow-cart") o.slow_cart = true;
         else if (a == "--wireless-group") o.wireless_group = next();
-        else if (a == "--control") o.control = next();
+        else if (a == "--control") o.control = next_path();
+        else if (a == "--player-name") o.player_name = next();
         else if (a == "--language") {
             const std::string l = next();
             o.language = l == "fr" ? 2 : l == "es" ? 5 : 1;
-        } else if (!a.empty() && a[0] != '-' && o.rom.empty()) o.rom = a;
+        } else if (!a.empty() && a[0] != '-' && o.rom.empty()) o.rom = path_from_utf8(a);
         else return std::fprintf(stderr, "unknown option %s\n", a.c_str()), false;
     }
     if (o.rom.empty() || o.module.empty()) {
@@ -553,28 +604,27 @@ uint32_t pad_key_for(Uint8 b) {
 
 }  // namespace
 
-int main(int argc, char** argv) {
-    Options o;
-    if (!parse_args(argc, argv, o)) return 2;
-
+static int run_game(Options o, st::GamePresentation* presentation, st::GamePauseMenu* menu,
+                    bool& close_requested, uint64_t test_menu_after = 0) {
     // The dump: a known release only (tools/build/st_build.py builds the module from the same dump).
     std::vector<uint8_t> rom = read_file(o.rom);
-    if (rom.size() < 0x200) return std::fprintf(stderr, "cannot read %s\n", o.rom.string().c_str()), 2;
+    if (rom.size() < 0x200) return std::fprintf(stderr, "cannot read %s\n", path_to_utf8(o.rom).c_str()), 2;
     const std::string sha1 = ntr::to_hex(ntr::sha1(rom));
     const KnownDump* dump = nullptr;
     for (const auto& k : kKnown)
         if (sha1 == k.sha1) dump = &k;
     if (!dump) {
-        std::fprintf(stderr, "%s: SHA-1 %s is not a known Spirit Tracks dump\n", o.rom.string().c_str(), sha1.c_str());
+        std::fprintf(stderr, "%s: SHA-1 %s is not a known Spirit Tracks dump\n", path_to_utf8(o.rom).c_str(), sha1.c_str());
         return 2;
     }
     if (!st::select_release(dump->code)) return std::fprintf(stderr, "no addresses for %s\n", dump->code), 2;
     std::printf("ROM: Spirit Tracks %s (%s)\n", dump->release, dump->code);
 
+    LoadedModule library;
     ntr::GameCode code;
     std::string error;
-    if (!load_module(o.module, code, error)) return std::fprintf(stderr, "%s\n", error.c_str()), 2;
-    std::printf("module: %s, %zu recompiled functions, %zu overlays\n", o.module.string().c_str(),
+    if (!load_module(o.module, library, code, error)) return std::fprintf(stderr, "%s\n", error.c_str()), 2;
+    std::printf("module: %s, %zu recompiled functions, %zu overlays\n", path_to_utf8(o.module).c_str(),
                 code.function_count, code.overlay_count);
 
     std::vector<Step> script;
@@ -584,19 +634,24 @@ int main(int argc, char** argv) {
     if (!o.hashes.empty() && !(hashes = std::fopen(o.hashes.string().c_str(), "w")))
         return std::fprintf(stderr, "cannot write %s\n", o.hashes.string().c_str()), 2;
 
-    SDL_SetMainReady();
-    if (!SDL_Init(o.headless ? 0 : SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
+    const SDL_InitFlags systems = o.headless ? 0 : SDL_INIT_AUDIO | SDL_INIT_GAMEPAD | (presentation ? 0 : SDL_INIT_VIDEO);
+    if (!SDL_InitSubSystem(systems))
         return std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError()), 1;
+    struct SdlScope {
+        SDL_InitFlags systems;
+        bool sharing_window;
+        ~SdlScope() { if (sharing_window) SDL_QuitSubSystem(systems); else SDL_Quit(); }
+    } sdl{systems, presentation != nullptr};
 
     ntr::RuntimeOptions ro;
     if (!o.no_save) {
         if (o.save.empty()) {
             char* pref = SDL_GetPrefPath("st-native", "st-native");
-            o.save = fs::path(pref ? pref : ".") / (std::string(dump->code) + ".sav");
+            o.save = path_from_utf8(pref ? pref : ".") / (std::string(dump->code) + ".sav");
             SDL_free(pref);
         }
         ro.save_data = read_file(o.save);
-        std::printf("save: %s (%s%s)\n", o.save.string().c_str(), ro.save_data.empty() ? "new" : "loaded",
+        std::printf("save: %s (%s%s)\n", path_to_utf8(o.save).c_str(), ro.save_data.empty() ? "new" : "loaded",
                     o.read_only_save ? ", read-only" : "");
         if (!o.record.empty() && !ro.save_data.empty()) {  // a recorded session replays from the same save
             const fs::path start = fs::path(o.record).concat(".start.sav");
@@ -610,6 +665,7 @@ int main(int argc, char** argv) {
     ro.trace_threads = o.trace_threads;
     ro.trace_calls = o.trace_calls;
     ro.language = o.language;
+    ro.console_name = o.player_name.empty() ? "Link" : o.player_name;
     if (!o.wireless_group.empty()) {  // read by the runtime's local wireless (engine patch 0011)
 #ifdef _WIN32
         _putenv_s("NTR_WIRELESS_GROUP", o.wireless_group.c_str());
@@ -623,23 +679,31 @@ int main(int argc, char** argv) {
     Shared sh;
     StHost host(o, sh, std::move(script), hashes);
 
-    SDL_Window* window = nullptr;
-    SDL_Renderer* renderer = nullptr;
-    SDL_Texture* texture = nullptr;
-    SDL_AudioStream* audio = nullptr;
+    std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> owned_window(nullptr, SDL_DestroyWindow);
+    std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)> renderer(nullptr, SDL_DestroyRenderer);
+    std::unique_ptr<SDL_Texture, decltype(&SDL_DestroyTexture)> texture(nullptr, SDL_DestroyTexture);
+    std::unique_ptr<SDL_AudioStream, decltype(&SDL_DestroyAudioStream)> audio(nullptr, SDL_DestroyAudioStream);
+    SDL_Window* window = presentation ? presentation->window() : nullptr;
     if (!o.headless) {
-        if (!SDL_CreateWindowAndRenderer("st-native", kW * o.scale, 2 * kH * o.scale, SDL_WINDOW_RESIZABLE, &window,
-                                         &renderer))
-            return std::fprintf(stderr, "cannot open the window: %s\n", SDL_GetError()), 1;
-        SDL_SetRenderLogicalPresentation(renderer, kW, 2 * kH, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-        if (!SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_ADAPTIVE)) SDL_SetRenderVSync(renderer, 1);
-        texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, kW, 2 * kH);
-        SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+        if (!presentation) {
+            owned_window.reset(SDL_CreateWindow("Spirit Tracks Native", kW * o.scale, 2 * kH * o.scale, SDL_WINDOW_RESIZABLE));
+            window = owned_window.get();
+            if (window) renderer.reset(SDL_CreateRenderer(window, nullptr));
+            if (!renderer)
+                return std::fprintf(stderr, "cannot open the window: %s\n", SDL_GetError()), 1;
+            SDL_SetRenderLogicalPresentation(renderer.get(), kW, 2 * kH, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+            if (!SDL_SetRenderVSync(renderer.get(), SDL_RENDERER_VSYNC_ADAPTIVE)) SDL_SetRenderVSync(renderer.get(), 1);
+            texture.reset(SDL_CreateTexture(renderer.get(), SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, kW, 2 * kH));
+            if (!texture) return std::fprintf(stderr, "cannot create the game texture: %s\n", SDL_GetError()), 1;
+            SDL_SetTextureScaleMode(texture.get(), SDL_SCALEMODE_NEAREST);
+        }
+        if (o.fullscreen && !SDL_SetWindowFullscreen(window, true))
+            std::fprintf(stderr, "cannot start in fullscreen: %s\n", SDL_GetError());
         const SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 48000};
-        audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
-        if (audio) SDL_ResumeAudioStreamDevice(audio);
+        audio.reset(SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr));
+        if (audio) SDL_ResumeAudioStreamDevice(audio.get());
         else std::fprintf(stderr, "no sound: %s\n", SDL_GetError());
-        host.set_audio(audio);
+        host.set_audio(audio.get());
     }
 
     // The game thread: the runtime and its guest threads (fibers) live there.
@@ -658,19 +722,92 @@ int main(int argc, char** argv) {
         }
     });
 
+    bool view_error = false;
+    int test_stage = 0;
     if (!o.headless) {
         uint32_t kb = 0, pad = 0, stick = 0;
         bool mouse_down = false;
+        bool menu_open = false;
+        uint64_t presented_frames = 0;
+        std::vector<uint32_t> frame(kW * kH * 2);
+
+        auto change_menu = [&](bool open) {
+            kb = pad = stick = 0;
+            mouse_down = false;
+            sh.held = sh.pressed = 0;
+            sh.touching = sh.fast = false;
+            host.name_keyboard.discard_pending();
+            if (open && SDL_TextInputActive(window)) SDL_StopTextInput(window);
+            {
+                std::lock_guard lock(sh.pause_mutex);
+                sh.paused = open;
+            }
+            sh.pause_cv.notify_one();
+            if (audio) {
+                if (open) SDL_PauseAudioStreamDevice(audio.get());
+                else {
+                    SDL_ClearAudioStream(audio.get());
+                    SDL_ResumeAudioStreamDevice(audio.get());
+                }
+            }
+            menu_open = open;
+            if (open) menu->open();
+            else menu->close();
+        };
+
+        auto test_key = [&](SDL_Scancode scancode, SDL_Keycode keycode) {
+            SDL_Event key{};
+            key.type = SDL_EVENT_KEY_DOWN;
+            key.key.windowID = SDL_GetWindowID(window);
+            key.key.scancode = scancode;
+            key.key.key = keycode;
+            key.key.down = true;
+            if (!SDL_PushEvent(&key)) view_error = sh.quit = true;
+        };
         while (!sh.done) {
+            if (presentation) {
+                const bool edit_name = !menu_open && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) &&
+                                       host.name_keyboard.active();
+                if (edit_name && !SDL_TextInputActive(window)) SDL_StartTextInput(window);
+                if (!edit_name && SDL_TextInputActive(window)) SDL_StopTextInput(window);
+            }
             SDL_Event e;
             if (SDL_WaitEventTimeout(&e, 4)) {
                 do {
+                    if (e.type == SDL_EVENT_QUIT || e.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+                        close_requested = true;
+                        sh.quit = true;
+                        break;
+                    }
+                    if (menu && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                        (e.key.scancode == SDL_SCANCODE_ESCAPE || e.key.scancode == SDL_SCANCODE_F1)) {
+                        change_menu(!menu_open);
+                        continue;
+                    }
+                    if (menu_open) {
+                        menu->input(e);
+                        switch (menu->action()) {
+                        case st::PauseAction::leave: sh.quit = true; break;
+                        case st::PauseAction::resume: change_menu(false); break;
+                        case st::PauseAction::stay: break;
+                        }
+                        continue;
+                    }
                     switch (e.type) {
-                    case SDL_EVENT_QUIT: sh.quit = true; break;
+                    case SDL_EVENT_WINDOW_FOCUS_LOST: kb = 0; mouse_down = false; sh.touching = false; sh.fast = false; break;
+                    case SDL_EVENT_TEXT_INPUT:
+                        if (presentation && SDL_TextInputActive(window)) queue_name_text(host.name_keyboard, e.text.text);
+                        break;
                     case SDL_EVENT_KEY_DOWN:
-                        if (e.key.scancode == SDL_SCANCODE_TAB) sh.fast = true;
+                        if (presentation && SDL_TextInputActive(window) && e.key.scancode == SDL_SCANCODE_BACKSPACE)
+                            host.name_keyboard.queue(st::NameKeyboard::backspace);
+                        else if (presentation && SDL_TextInputActive(window) && e.key.scancode == SDL_SCANCODE_A &&
+                                 (e.key.mod & SDL_KMOD_CTRL) && !e.key.repeat)
+                            host.name_keyboard.queue(st::NameKeyboard::select_all);
                         else if (e.key.scancode == SDL_SCANCODE_F11 && !e.key.repeat)
                             SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+                        else if (presentation && SDL_TextInputActive(window)) break;
+                        else if (e.key.scancode == SDL_SCANCODE_TAB) sh.fast = true;
                         else if (const uint32_t b = key_for(e.key.scancode)) {
                             kb |= b;
                             if (!e.key.repeat) sh.pressed |= b;
@@ -696,11 +833,16 @@ int main(int argc, char** argv) {
                     case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     case SDL_EVENT_MOUSE_BUTTON_UP:
                     case SDL_EVENT_MOUSE_MOTION: {
-                        SDL_ConvertEventToRenderCoordinates(renderer, &e);
+                        if (renderer) SDL_ConvertEventToRenderCoordinates(renderer.get(), &e);
                         float x = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.x : e.button.x;
                         float y = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.y : e.button.y;
+                        if (presentation && !presentation->game_coordinates(x, y)) {
+                            mouse_down = false;
+                            sh.touching = false;
+                            break;
+                        }
                         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT)
-                            mouse_down = y >= kH;  // a press must start on the bottom screen
+                            mouse_down = x >= 0 && x < kW && y >= kH && y < 2 * kH;
                         if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT) mouse_down = false;
                         if (mouse_down) {
                             sh.touch_x = std::clamp(int(x), 0, kW - 1);
@@ -714,24 +856,56 @@ int main(int argc, char** argv) {
                 } while (SDL_PollEvent(&e));
                 sh.held = kb | pad | stick;
             }
-            bool draw = false;
+            if (sh.quit) {
+                if (menu_open) change_menu(false);
+                continue;
+            }
+            if (menu_open) {
+                if (!menu->draw()) view_error = sh.quit = true;
+                if (test_menu_after && !view_error && (test_stage == 1 || test_stage == 3)) {
+                    test_key(test_stage == 1 ? SDL_SCANCODE_F1 : SDL_SCANCODE_ESCAPE,
+                             test_stage == 1 ? SDLK_F1 : SDLK_ESCAPE);
+                    ++test_stage;
+                }
+                continue;
+            }
+            bool draw;
             {
                 std::lock_guard<std::mutex> lock(sh.m);
-                if (sh.fresh) {
-                    SDL_UpdateTexture(texture, nullptr, sh.pixels.data(), kW * 4);
+                draw = sh.fresh;
+                if (draw) {
+                    frame.swap(sh.pixels);
                     sh.fresh = false;
-                    draw = true;
                 }
             }
-            if (draw) {
-                SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-                SDL_RenderClear(renderer);
-                SDL_RenderTexture(renderer, texture, nullptr, nullptr);
-                SDL_RenderPresent(renderer);
+            if (!draw) continue;
+            if (presentation) {
+                if (!presentation->present_game(frame.data())) view_error = sh.quit = true;
+            } else {
+                const bool drawn = SDL_UpdateTexture(texture.get(), nullptr, frame.data(), kW * 4) &&
+                                   SDL_SetRenderDrawColor(renderer.get(), 0, 0, 0, 255) &&
+                                   SDL_RenderClear(renderer.get()) &&
+                                   SDL_RenderTexture(renderer.get(), texture.get(), nullptr, nullptr) &&
+                                   SDL_RenderPresent(renderer.get());
+                if (!drawn) view_error = sh.quit = true;
+            }
+            if (test_menu_after && !view_error) {
+                ++presented_frames;
+                if (test_stage == 0 && presented_frames == test_menu_after) {
+                    test_key(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
+                    test_stage = 1;
+                } else if (test_stage == 2 && presented_frames == test_menu_after + 30) {
+                    test_key(SDL_SCANCODE_F1, SDLK_F1);
+                    test_stage = 3;
+                } else if (test_stage == 4 && presented_frames == test_menu_after + 60) {
+                    sh.quit = true;
+                }
             }
         }
     }
+    if (presentation && SDL_TextInputActive(window)) SDL_StopTextInput(window);
     game.join();
+    if (!rc && (view_error || (test_menu_after && test_stage != 4))) rc = 1;
     if (hashes) std::fclose(hashes);
     if (!o.record.empty()) {
         std::ofstream rec(o.record);
@@ -754,10 +928,45 @@ int main(int argc, char** argv) {
     }
     std::printf("ran %llu frames; %llu instructions on the fallback interpreter; exit %d\n",
                 (unsigned long long)host.frames(), (unsigned long long)host.interp_total(), rc);
-    if (audio) SDL_DestroyAudioStream(audio);
-    if (texture) SDL_DestroyTexture(texture);
-    if (renderer) SDL_DestroyRenderer(renderer);
-    if (window) SDL_DestroyWindow(window);
-    SDL_Quit();
     return rc;
+}
+
+int st::run_game_cli(int argc, char** argv) {
+    Options options;
+    if (!parse_args(argc, argv, options)) return 2;
+    SDL_SetMainReady();
+    bool close_requested = false;
+    return run_game(std::move(options), nullptr, nullptr, close_requested);
+}
+
+st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentation& presentation, GamePauseMenu& menu,
+                                      uint64_t test_menu_after) {
+    Options o;
+    o.rom = launch.rom;
+    o.module = launch.module;
+    o.language = launch.language;
+    o.scale = launch.scale;
+    o.fullscreen = launch.fullscreen;
+    o.no_save = test_menu_after != 0;
+    SDL_Window& window = *presentation.window();
+
+    // Resize the existing window for the DS screens and put the launcher back at its previous size on Esc.
+    int width = 0, height = 0;
+    const bool resize = !(SDL_GetWindowFlags(&window) & SDL_WINDOW_MAXIMIZED) &&
+                        SDL_GetWindowSize(&window, &width, &height);
+    if (resize && !o.fullscreen) {
+        SDL_Rect work_area{};
+        const float dpi = SDL_GetWindowDisplayScale(&window);
+        const int desired_width = int(kW * o.scale * dpi);
+        const int desired_height = int(2 * kH * o.scale * dpi);
+        if (SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(&window), &work_area))
+            SDL_SetWindowSize(&window, std::min(desired_width, work_area.w), std::min(desired_height, work_area.h));
+    }
+    bool close_requested = false;
+    const int rc = run_game(std::move(o), &presentation, &menu, close_requested, test_menu_after);
+    if (!close_requested) {
+        if (SDL_GetWindowFlags(&window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(&window, false);
+        if (resize) SDL_SetWindowSize(&window, width, height);
+    }
+    return {rc, close_requested};
 }

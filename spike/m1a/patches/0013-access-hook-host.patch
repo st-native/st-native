@@ -1,0 +1,27 @@
+diff --git a/runtime/include/ntr/runtime.hpp b/runtime/include/ntr/runtime.hpp
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -93,6 +93,9 @@ public:
+     virtual void on_wifi_settings(const uint8_t* data, size_t size) {}
+ };
+ 
++// From a guest hook, get the host of this runtime on the game thread.
++Host& hook_host(NtrCpu* cpu);
++
+ struct RuntimeOptions {
+     std::vector<uint8_t> save_data;  // initial cartridge save memory (may be empty)
+     bool trace_calls = false;
+diff --git a/runtime/src/runtime.cpp b/runtime/src/runtime.cpp
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -50,6 +50,10 @@ std::unique_ptr<Runtime> Runtime::create(std::vector<uint8_t> rom, const GameCode&
+     return std::make_unique<RuntimeImpl>(std::move(rom), code, host, std::move(options));
+ }
+ 
++Host& hook_host(NtrCpu* cpu) {
++    return static_cast<RuntimeImpl*>(cpu->runtime)->host;
++}
++
+ RuntimeImpl::RuntimeImpl(std::vector<uint8_t> rom, const GameCode& code, Host& h, RuntimeOptions opts)
+     : host(h), options(std::move(opts)) {
+     build_function_index(code);

@@ -1,0 +1,28 @@
+<rml>
+<head>
+  <link type="text/rcss" href="launcher.rcss" />
+  <style>
+    body { background-color: #101717c9; display: flex; align-items: center; justify-content: center; }
+    #pause-panel { box-sizing: border-box; width: 308dp; padding: 20dp; background-color: #171e1e;
+                   border: 1dp #52645a; border-radius: 6dp; }
+    #pause-panel h2 { margin-bottom: 14dp; }
+    #pause-panel input { width: 100%; }
+    #display-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15dp; }
+    #display-row input { width: 112dp; }
+    #resume { background-color: #c7dbb9; border-color: #c7dbb9; color: #18231d; margin-bottom: 8dp; }
+    #resume:hover { background-color: #dfebd5; }
+    #resume:focus { border-color: #eed08c; }
+  </style>
+</head>
+<body>
+  <div id="pause-panel">
+    <h2>Paused</h2>
+    <div id="display-row">
+      <label for="display">Display mode</label>
+      <input type="submit" id="display" value="Windowed" />
+    </div>
+    <input type="submit" id="resume" value="Resume" />
+    <input type="submit" id="leave" value="Return to launcher" />
+  </div>
+</body>
+</rml>

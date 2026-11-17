@@ -9,6 +9,8 @@
 
 #include "ntr/nitro.h"
 
+extern "C" void st_name_keyboard(NtrCpu* cpu);
+
 namespace {
 
 // Addresses, per release. How each was found: game/st/config/<code>/hooks.txt.
@@ -43,6 +45,7 @@ void* st::find_hook(const char* name) {
         void* fn;
     } kHooks[] = {
         {"st_os_irq_handler", reinterpret_cast<void*>(&st_os_irq_handler)},
+        {"st_name_keyboard", reinterpret_cast<void*>(&st_name_keyboard)},
         {"ntr_nitro_save_context", reinterpret_cast<void*>(&ntr_nitro_save_context)},
         {"ntr_nitro_load_context", reinterpret_cast<void*>(&ntr_nitro_load_context)},
         {"ntr_nitro_init_context", reinterpret_cast<void*>(&ntr_nitro_init_context)},

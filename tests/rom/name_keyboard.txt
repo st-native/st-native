@@ -1,0 +1,15 @@
+# Save-name input replay for BKIE revision 0. Start with a fresh save file.
+# The input before the name editor and during confirmation must be ignored.
+200 type Outside
+1000 press START
+1100 touch 128 120
+1850 touch 128 160
+2000 touch 130 62
+2140 type Róbinx
+2160 backspace
+2200 touch 190 176
+2260 type Outside
+2400 touch 202 110
+2600 touch 202 110
+2800 touch 205 110
+3150 quit

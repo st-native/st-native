@@ -1,0 +1,77 @@
+<rml>
+<head>
+  <title>Spirit Tracks Native</title>
+  <link type="text/rcss" href="launcher.rcss" />
+</head>
+<body>
+  <div id="viewport">
+    <div id="layout">
+      <div id="header">
+        <div id="mark"><div class="screen"></div><div class="screen lower"></div></div>
+        <h1>Spirit Tracks Native</h1>
+      </div>
+      <div id="content">
+        <div id="game">
+          <h2 id="game-heading">Game ROM</h2>
+          <p class="hint">USA/Australia · Revision 0 · .nds</p>
+          <div id="source">
+            <div id="rom">No ROM selected</div>
+            <input type="submit" id="browse" value="Browse…" />
+          </div>
+          <p id="status"></p>
+          <input type="submit" id="play" value="Play" disabled="disabled" />
+        </div>
+        <div id="settings">
+          <h2 id="settings-heading">Settings</h2>
+          <div class="field">
+            <label for="window-mode">Display mode</label>
+            <select id="window-mode">
+              <option value="windowed">Windowed</option>
+              <option value="fullscreen">Fullscreen</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="scale">Window scale</label>
+            <select id="scale">
+              <option value="1">1×</option>
+              <option value="2" selected="selected">2×</option>
+              <option value="3">3×</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="language">Game language</label>
+            <select id="language">
+              <option value="en">English</option>
+              <option value="fr">Français</option>
+              <option value="es">Español</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="build-panel">
+        <div id="build-heading">
+          <h2>Compilation</h2>
+          <p id="cache-summary">Checking local cache…</p>
+        </div>
+        <div id="build-actions">
+          <input type="submit" id="rebuild" value="Compile" disabled="disabled" />
+          <input type="submit" id="remove-cache" value="Remove cache…" disabled="disabled" />
+          <input type="submit" id="toggle-steps" value="Show steps" />
+          <input type="submit" id="open-log" value="Open log" disabled="disabled" />
+        </div>
+        <div id="build-progress">
+          <div id="build-progress-heading">
+            <p id="build-stage"></p>
+            <p id="build-elapsed"></p>
+          </div>
+          <progress id="build-meter"></progress>
+          <p id="build-activity"></p>
+        </div>
+        <div id="build-details">
+          <div id="build-steps"><p>Build steps appear here when compilation starts.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</rml>

@@ -24,8 +24,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 INCLUDE = [
     "README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "LICENSE", "NOTICE.md", ".gitignore", ".gitattributes",
-    ".gitlab-ci.yml",
-    "app/",
+    ".gitlab-ci.yml", "Launch.cmd",
+    "app/", "platform/windows/launcher.py", "platform/windows/launcher_worker.cpp",
+    "platform/windows/launcher.rc", "platform/windows/launcher.ico",
     "game/st/config/", "game/st/hooks/",
     "tools/__init__.py", "tools/check_no_game_data.py", "tools/game_data_allowlist.txt",
     "tools/build/build_program.cmd", "tools/build/st_build.py", "tools/build/st_build.cmd",

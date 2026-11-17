@@ -77,6 +77,13 @@ modernisations, higher internal resolution, widescreen, smoother motion without 
 
 ## M4 — Native desktop experience
 
+**In progress.** The Windows developer launcher has ROM selection, local preparation and reuse, and display and
+language settings. The game opens in the same window. Esc and F1 open the pause menu, and the physical keyboard
+can enter the name on the game's new-save screen. See [BUILDING.md](BUILDING.md) for setup.
+
+**Proposed.** Once the local game module is ready, bring the live title screen into the same window as the launcher.
+Use frames rendered by the runtime from the player's ROM and draw the launcher controls above them.
+
 | | |
 |---|---|
 | Scope | Layout engine + all modes, second window, persistence, input profiles, first settings UI |

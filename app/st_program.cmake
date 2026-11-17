@@ -4,12 +4,39 @@
 # ntr_run: the headless host of the M1a spike (synthetic cartridge, per-frame state hashes)
 include(${ST_ROOT}/spike/m1a/host/m1a_targets.cmake)
 
-# st_native: the program (app/st_native.cpp) with the Spirit Tracks glue (game/st/hooks)
-add_executable(st_native ${ST_ROOT}/app/st_native.cpp ${ST_ROOT}/game/st/hooks/st_hooks.cpp
-               ${ST_ROOT}/game/st/hooks/st_probe.cpp)
-target_include_directories(st_native PRIVATE ${ST_ROOT}/game/st/hooks)
-target_link_libraries(st_native PRIVATE ntr_runtime ntr_common SDL3::SDL3-static)
+# The game host is shared by the CLI and the desktop launcher.
+add_library(st_game_host STATIC ${ST_ROOT}/app/st_native.cpp ${ST_ROOT}/game/st/hooks/st_hooks.cpp
+            ${ST_ROOT}/game/st/hooks/st_probe.cpp ${ST_ROOT}/game/st/hooks/name_keyboard.cpp)
+target_include_directories(st_game_host PRIVATE ${ST_ROOT}/game/st/hooks)
+target_link_libraries(st_game_host PUBLIC ntr_runtime ntr_common SDL3::SDL3-static)
+add_executable(st_native ${ST_ROOT}/app/st_native_main.cpp)
+target_link_libraries(st_native PRIVATE st_game_host)
 if(NOT MSVC AND NOT APPLE)
   # (as for ntr_run: melonDS and ntr_runtime call each other, and GNU ld reads each static library once)
   target_link_libraries(st_native PRIVATE "$<LINK_GROUP:RESCAN,ntr_runtime,melonds_core,melonds_net>")
+endif()
+
+# Source-checkout launcher for the Windows developer alpha. Reuse the engine's pinned RmlUi/GL3 backend.
+if(WIN32)
+  set(ST_LAUNCHER_RESOURCE "${ST_ROOT}/platform/windows/launcher.rc")
+  add_executable(st_launcher WIN32
+    "${ST_ROOT}/app/ui/launcher.cpp" "${ST_ROOT}/app/present/launcher_window.cpp"
+    "${ST_ROOT}/platform/windows/launcher_worker.cpp" "${ST_LAUNCHER_RESOURCE}")
+  set_source_files_properties("${ST_LAUNCHER_RESOURCE}" PROPERTIES
+    OBJECT_DEPENDS "${ST_ROOT}/platform/windows/launcher.ico")
+  target_include_directories(st_launcher PRIVATE "${ST_ROOT}/app" "${ST_ROOT}/app/setup")
+  target_link_libraries(st_launcher PRIVATE st_game_host rmlui_backend melonds_core shell32)
+
+  set(ST_LAUNCHER_ASSETS "$<TARGET_FILE_DIR:st_launcher>/launcher-assets")
+  set(ST_LAUNCHER_FONTS "${CMAKE_SOURCE_DIR}/game/ui/res/fonts")
+  add_custom_target(st_launcher_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${ST_LAUNCHER_ASSETS}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ST_ROOT}/app/ui/launcher.rml" "${ST_ROOT}/app/ui/launcher.rcss"
+      "${ST_ROOT}/app/ui/pause.rml"
+      "${ST_LAUNCHER_FONTS}/Cinzel.ttf" "${ST_LAUNCHER_FONTS}/OFL-Cinzel.txt"
+      "${ST_LAUNCHER_FONTS}/AlegreyaSans-Regular.ttf" "${ST_LAUNCHER_FONTS}/OFL-AlegreyaSans.txt"
+      "${ST_LAUNCHER_ASSETS}"
+    VERBATIM)
+  add_dependencies(st_launcher st_launcher_assets)
 endif()

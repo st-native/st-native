@@ -15,6 +15,7 @@ copy of the game.
 | AArch64 context switch for Android (patch 0003) | [Phantom Hourglass Recomp](https://github.com/dguillot-gh/phantom-hourglass-recomp) by dguillot-gh, commit `db0d762` | GPL-3.0 | ported with attribution in the patch |
 | Game-data guard (`tools/check_no_game_data.py`) | adapted from FFCCEOT-Recomp's `tools/check_no_game_data.py`, commit `934c743` | GPL-3.0 | our adaptation |
 | SDL3 (`release-3.4.18`), FreeType (`VER-2-14-3`), RmlUi (`6.3`) | fetched by the engine's build | zlib; FreeType License / GPL-2.0; MIT | linked into the program |
+| Cinzel and Alegreya Sans | font files from the pinned FFCCEOT-Recomp checkout above | SIL Open Font License 1.1 | used by the launcher with the original font license files |
 | dsd (ds-decomp) 0.12.1 | [AetiasHax/ds-decomp](https://github.com/AetiasHax/ds-decomp) | MIT | downloaded by the user (`poc/fetch_tools.py --only dsd`), run on the user's machine; not redistributed |
 | Capstone 5.0.7 | [capstone-engine](https://github.com/capstone-engine/capstone) | BSD-3-Clause | installed from PyPI by the user for our function discovery |
 | LLVM / clang 22.1.8 | [LLVM](https://llvm.org) | Apache-2.0 with LLVM exceptions | the user's compiler (a release would bundle a pinned copy, ADR-0002) |

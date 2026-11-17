@@ -21,6 +21,12 @@ main 02027144 replace ntr_nitro_load_context   # OS_LoadContext
 # ntr::nitro::irq_handler (r0 handler, r1 table, r2 IF, r3 0x80000000, r12 0x04000210).
 itcm 01ffbd70 replace st_os_irq_handler        # OS_IrqHandler
 
+# Save-name keyboard. Local boot/touch replay and ov003 entry probes identified the update
+# called once per editable frame from 020b88f0 with keyboard 020bb1ac, absent on confirmation.
+# Probing writes to the editor's name buffer during stylus insertion found 020b7d64. Its
+# caller and neighboring delete callback supply the guest append/backspace ABI used by this hook.
+ov003 020b8918 before st_name_keyboard
+
 # DS Protect (anti-piracy middleware in overlay 1): report a genuine cartridge, as the engine does for FFCC.
 # dsd 0.12.1 lists 41 encrypted DS Protect functions in ov001 (flagged !dsprot in functions.txt, which the recompiler
 # never translates). These six are the ones unencrypted game code calls (calls from ov001, ov026 and ov084 in our R1

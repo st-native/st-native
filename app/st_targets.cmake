@@ -6,5 +6,8 @@
 # options and targets; our targets are therefore defined at the end of the engine's top-level CMakeLists.txt, with the
 # same settings as the engine's own programs.
 get_filename_component(ST_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+if(WIN32)
+  enable_language(RC)
+endif()
 # (A deferred call expands its variables when it runs, where CMAKE_CURRENT_LIST_DIR is the engine's: hence ST_ROOT.)
 cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL include "${ST_ROOT}/app/st_program.cmake")

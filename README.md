@@ -11,11 +11,9 @@ simultaneously). Goals: remappable controls, flexible layouts for the two screen
 screen and other modernisations, higher internal resolution, widescreen, smoother motion without speeding up the
 game, and mods ([ENHANCEMENTS.md](docs/design/ENHANCEMENTS.md)). "Spirit Tracks Native" is a working name.
 
-> **Status (2026-11-14): the game boots to a new game on Windows x64, from the player's own dump.** The module is
-> generated and compiled locally and reproducibly (two clean builds are byte-identical); a scripted run from power-on
-> through the title screen, save creation and file selection to the start of a new game replays with identical
-> per-frame state. Not yet playable beyond the first scene, not yet packaged with a launcher, and not tested on other
-> platforms. Nothing has been published yet: the GitLab.com project is prepared locally for review.
+> **Windows developer alpha.** The launcher verifies a local USA/Australia revision 0 ROM, prepares a cached module,
+> and opens the game with the selected display and language settings. A scripted run using the game's original
+> checks reached Castle Town, saved and reloaded there. The rest of the campaign is still under validation.
 
 > Unofficial fan project, not affiliated with or endorsed by Nintendo. "The Legend of Zelda" and "Spirit Tracks" are
 > Nintendo trademarks, used only to describe compatibility. This project contains no game code or data; you need your
@@ -28,13 +26,13 @@ game, and mods ([ENHANCEMENTS.md](docs/design/ENHANCEMENTS.md)). "Spirit Tracks 
 | Works (Windows x64, verified on one PC) | Building the program from pinned sources (`tools\build\build_program.cmd`); building the game module from your dump, reproducibly (`tools\build\st_build.cmd`); playing from power-on to the start of a new game in a window, with keyboard, mouse as touch screen and saves (`st_native`); scripted runs and recorded sessions replayed with per-frame state hashes ([docs/BUILDING.md](docs/BUILDING.md), [report](docs/research/M1B_FIRST_BOOT.md)) |
 | Experimental | A function list from our own extractor and discovery, which decrypts nothing (`st_build.py --functions ours`; boots to the new game); running the game's own anti-piracy checks instead of replacing them: with our list, a scripted session plays from power-on through the first train ride to Castle Town, saves there and reloads (`tests/rom/castle_town.txt`); the default build's replacements lose the train's controls on that ride ([report](docs/research/DSPROTECT_ORIGINAL_PATH.md)). Linux x64/arm64, macOS arm64: the engine builds and passes the recompiler and synthetic-cartridge checks ([M1A_SPIKE.md](docs/research/M1A_SPIKE.md)); our program is not built there yet. Android arm64: the engine compiles and links only |
 | Not checked yet | Gameplay past Castle Town; the picture in the window (checked through the frames it receives); sound by ear; gamepads; a second machine |
-| Planned | [docs/ROADMAP.md](docs/ROADMAP.md): launcher with ROM selection and first-run build (M4), playable early game (M2), runtime stability and microphone (M3), enhancements (M5), Steam Deck, Android and macOS (M6), mods (M7), full campaign (M8) |
+| Planned | [docs/ROADMAP.md](docs/ROADMAP.md): standalone packaging and desktop settings (M4), playable early game (M2), runtime stability and microphone (M3), enhancements (M5), Steam Deck, Android and macOS (M6), mods (M7), full campaign (M8) |
 | Unsupported | Multiplayer (Battle/Tag modes) until a later decision; any dump other than USA/Australia revision 0 (`BKIE`) |
 
 ## Building and playing
 
-[docs/BUILDING.md](docs/BUILDING.md): the validated path on Windows x64, from a clean checkout to a new game, plus how
-to check that your builds and runs are reproducible. Contributors: [CONTRIBUTING.md](CONTRIBUTING.md).
+Build the Windows program as described in [docs/BUILDING.md](docs/BUILDING.md), then open `st_launcher.exe` from its
+build folder or use [Launch.cmd](Launch.cmd). See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor instructions.
 
 ## Documents
 
