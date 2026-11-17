@@ -23,6 +23,12 @@
         </div>
         <div id="settings">
           <h2 id="settings-heading">Settings</h2>
+          <div class="settings-tabs">
+            <input type="submit" id="tab-screens" class="selected" value="Screens" />
+            <input type="submit" id="tab-window" value="Window" />
+            <input type="submit" id="tab-game" value="Game" />
+          </div>
+          <div id="settings-window" class="settings-page">
           <div class="field">
             <label for="window-mode">Display mode</label>
             <select id="window-mode">
@@ -38,6 +44,26 @@
               <option value="3">3×</option>
             </select>
           </div>
+          </div>
+          <div id="settings-screens" class="settings-page selected">
+          <div class="field">
+            <label for="screen-layout">Screen layout</label>
+            <select id="screen-layout">
+              <option value="focus">Large + side</option>
+              <option value="classic">Classic DS</option>
+              <option value="side-by-side">Side by side</option>
+              <option value="pip">PiP overlay</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="auto-join">Cutscene view</label>
+            <select id="auto-join">
+              <option value="automatic">Single screen</option>
+              <option value="manual">Original DS</option>
+            </select>
+          </div>
+          </div>
+          <div id="settings-game" class="settings-page">
           <div class="field">
             <label for="language">Game language</label>
             <select id="language">
@@ -45,6 +71,7 @@
               <option value="fr">Français</option>
               <option value="es">Español</option>
             </select>
+          </div>
           </div>
         </div>
       </div>

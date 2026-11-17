@@ -3,11 +3,14 @@
   <link type="text/rcss" href="launcher.rcss" />
   <style>
     body { background-color: #101717c9; display: flex; align-items: center; justify-content: center; }
-    #pause-panel { box-sizing: border-box; width: 308dp; padding: 20dp; background-color: #171e1e;
+    #pause-panel { box-sizing: border-box; width: 440dp; max-width: 94%; max-height: 94%; overflow-y: auto;
+                   padding: 16dp 20dp; background-color: #171e1e;
                    border: 1dp #52645a; border-radius: 6dp; }
-    #pause-panel h2 { margin-bottom: 14dp; }
-    #pause-panel input { width: 100%; }
-    #display-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15dp; }
+    #pause-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14dp; }
+    #classic-shortcut { color: #b3c0b8; font-size: 15dp; }
+    #pause-panel > input { width: 100%; }
+    #pause-panel .settings-page { min-height: 92dp; }
+    #display-row, #layout-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10dp; }
     #display-row input { width: 112dp; }
     #resume { background-color: #c7dbb9; border-color: #c7dbb9; color: #18231d; margin-bottom: 8dp; }
     #resume:hover { background-color: #dfebd5; }
@@ -16,10 +19,37 @@
 </head>
 <body>
   <div id="pause-panel">
-    <h2>Paused</h2>
-    <div id="display-row">
-      <label for="display">Display mode</label>
-      <input type="submit" id="display" value="Windowed" />
+    <div id="pause-heading">
+      <h2>Paused</h2>
+      <p id="classic-shortcut">F2 · Original view</p>
+    </div>
+    <div class="settings-tabs">
+      <input type="submit" id="tab-screens" class="selected" value="Screens" />
+      <input type="submit" id="tab-window" value="Window" />
+    </div>
+    <div id="settings-screens" class="settings-page selected">
+      <div id="layout-row" class="field">
+        <label for="pause-screen-layout">Screen layout</label>
+        <select id="pause-screen-layout">
+          <option value="focus">Large + side</option>
+          <option value="classic">Classic DS</option>
+          <option value="side-by-side">Side by side</option>
+          <option value="pip">PiP overlay</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="auto-join">Cutscene view</label>
+        <select id="auto-join">
+          <option value="automatic">Single screen</option>
+          <option value="manual">Original DS</option>
+        </select>
+      </div>
+    </div>
+    <div id="settings-window" class="settings-page">
+      <div id="display-row" class="field">
+        <label for="display">Display mode</label>
+        <input type="submit" id="display" value="Windowed" />
+      </div>
     </div>
     <input type="submit" id="resume" value="Resume" />
     <input type="submit" id="leave" value="Return to launcher" />

@@ -26,6 +26,44 @@ HUD moves). Reference behaviour: Wind Waker HD Recomp `docs/gamepad-display.md`.
 
 ## 3. Modes
 
+**Windows developer alpha.** The launcher and pause menu offer **Large + side** (default), **Classic DS**,
+**Side by side**, and **PiP overlay**. Large + side gives the touch screen twice the linear size of the top
+screen in a landscape window. The secondary view has its own space, so it cannot cover the HUD. In a portrait
+window this mode uses an equally sized stack. Picture-in-picture is an explicit upper-right overlay.
+**Cutscene view** defaults to Single screen. The pre-title 3D opening uses a re-rendered central projection
+in the largest centered 4:3 game view; unused window space stays black. It recovers the vertical interval omitted between the original off-axis views, instead of
+compositing the two finished screens. The original projection and game state are restored after drawing the extra
+view. This first implementation rasterizes at 256×192. It recomposes a camera view rather than preserving every
+pixel of the two original screens; scaling and reframing change the presentation. A lossless claim is not verified.
+The opening's game-side profile places its complete screen-space 3D UI canvas inside a centered 168×126 rectangle
+at (44, 4), above the lower prompt. Only the extra cinematic image uses this placement. The 2D prompt, copyright,
+touch mapping and both original DS screen images are unchanged. The engine accepts a generic placement rectangle;
+it has no logo-specific positions or game IDs.
+**Original DS** preserves the two-screen composition. F2 overrides the current scene. Other scene-specific rules
+remain Proposed. See the [scene validation list](GAMEPLAY_INTERACTION_MATRIX.md#scenes-to-check-with-the-desktop-layouts).
+
+### Reusing the cinematic camera
+
+**Verified:** only the pre-title opening currently selects this camera. Its logo, prompt, overlay IDs and scene
+lifecycle are not special cases inside the engine. The engine operates on projection matrices and 2D layer provenance.
+
+To support another scene:
+
+1. Identify its entry/exit using verified game state in `game/st/hooks/`; do not enable the camera just because both
+   screens are active. Record the evidence beside the scene rule.
+2. Check whether its two views are off-axis portions of the same 3D camera. Those can reuse the current recentering
+   pass. Independent cameras, maps and prerecorded/2D images need a different composition strategy.
+3. Verify its UI layers. The current compositor accepts text backgrounds and palette sprites, excludes bitmap BG/OBJ
+   copies of captured 3D, and retains screen-space 3D UI and 2D foreground for the alternating frame pair. A scene
+   using bitmap art as actual interface needs an explicit policy rather than dropping that art or treating it as 3D.
+4. Validate touch mapping, fades, transitions, UI removal and the manual override. The previous foreground expires
+   after one frame; this is not a persistent cache of a logo or of text.
+5. Replay with the camera off and on, compare guest hashes, and review the composition at all visual checkpoints.
+   Use `st_native --gx-check --cinematic-aspect 1.3333333333` with the usual local ROM/module arguments to check
+   that the original polygon list is restored after the extra camera passes.
+   Keep the new scene disabled until its semantics are confirmed. Widescreen reframing and higher render resolution
+   remain separate features.
+
 | Mode | Description | Parameters | Default on |
 |---|---|---|---|
 | **Single** | One DS screen fills the window at its aspect ratio (bars filled black, blurred edges or a pattern). The other is hidden until requested. | which screen: *follow 3D* (default) / Touch / Top | — |

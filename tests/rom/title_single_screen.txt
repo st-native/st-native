@@ -1,0 +1,11 @@
+# Single-screen title regression. USA/Australia rev. 0, blank save, standard CPU/cart settings.
+# Own input only. Captures stay in the ignored --shots directory; never publish the resulting images.
+# Compare --hashes and the original dual-screen BMPs with the camera disabled/enabled.
+# With --cinematic-aspect 1.3333333333, also review the logo, lower prompt and transition.
+3050 shot 01_reveal
+3200 shot 02_title
+3500 shot 03_prompt
+3550 touch 128 160
+3750 shot 04_fade
+4200 shot 05_menu
+4200 quit

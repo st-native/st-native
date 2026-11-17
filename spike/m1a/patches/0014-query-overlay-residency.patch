@@ -1,0 +1,65 @@
+Expose display capture and overlay residency to frame callbacks.
+
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -73,6 +73,7 @@
+     // Widescreen: the array texture is (256 + 2 * wide_extra) * scale texels wide (0: 256 * scale). The top screen's
+     // picture fills it; the bottom screen's 256 pixels are in the middle.
+     int wide_extra = 0;
++    bool display_capture = false;  // hardware captured the display during this frame
+     // Measurements of the emulation up to this frame (testing, see docs/TESTING.md).
+     double emu_ms = 0;               // host time spent emulating this frame (not the frontend's pacing or presenting)
+     uint64_t interp_steps = 0;       // instructions the interpreter ran for the frames' functions this frame
+@@ -145,6 +146,9 @@
+     virtual void touch(int x, int y) = 0;
+     virtual void release_touch() = 0;
+ 
++    // Queries runtime overlay probes from the game thread, for example inside Host::on_frame.
++    virtual bool is_overlay_resident(uint32_t id) = 0;
++
+     // Video settings. A change takes effect at the next frame boundary; video() reports what is in use (a GL
+     // renderer that failed to start falls back to Software).
+     virtual void set_video(const VideoSettings& settings) = 0;
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -58,6 +58,7 @@
+     void set_buttons(uint32_t held, uint32_t pressed) override;
+     void touch(int x, int y) override;
+     void release_touch() override;
++    bool is_overlay_resident(uint32_t id) override;
+     void set_video(const VideoSettings& settings) override;
+     VideoSettings video() const override { return video_; }
+     void set_fast_cart(bool on) override;
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -368,7 +368,9 @@
+     }
+ 
+     if (options.perf) report_perf();
++    const bool display_capture = probe_capture_;
+     if (options.fps_probe) probe_frame();
++    probe_capture_ = false;
+     if (gx_) gx_->report(frames_);
+     if (options.dump_at_frame && frames_ == options.dump_at_frame) dump_state();
+     for (const auto& d : options.ram_dumps) {
+@@ -380,6 +382,7 @@
+     }
+ 
+     Frame frame;
++    frame.display_capture = display_capture;
+     void* top = nullptr;
+     void* bottom = nullptr;
+     if (n.GPU.GetFramebuffers(&top, &bottom)) {
+@@ -645,6 +648,12 @@
+     for (u32 i = 0; i < ov.nprobes; i++)
+         if (ntr_rd32(&cpu, ov.probe_addr[i]) != ov.probe_val[i]) return false;
+     return true;
++}
++
++bool RuntimeImpl::is_overlay_resident(uint32_t id) {
++    if (id >= overlays_by_id_.size()) return false;
++    const auto* overlay = overlays_by_id_[id];
++    return overlay && overlay->nprobes && overlay_resident(*overlay);
+ }
+ 
+ const NtrFuncEntry* RuntimeImpl::lookup(u32 target) {

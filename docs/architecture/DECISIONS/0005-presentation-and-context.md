@@ -25,3 +25,12 @@ started with brightness/pixel heuristics and replaced them with a read-only game
 - Automatic mode is only as good as the verified context flags; until they exist, Auto is limited to the display-swap
   signal and is labelled experimental.
 - Game-state readers need per-release address tables and tests on a synthetic guest memory (WWHD pattern).
+
+## Implementation note (2026-11-17)
+
+**Verified for the pre-title opening only:** the game layer identifies a shared scene by overlay residency and display
+capture (see `game/st/hooks/screen_context.hpp`). The frontend fits the optional cinematic view to a centered 4:3
+rectangle and routes that view's pointer to the original Touch Screen coordinates. The runtime supplies an extra,
+recentered camera image and its UI layers; it does not choose a layout or window geometry. This is a camera
+rendering enhancement, separate from laying out the two unmodified screen images. Both original images remain
+available through the manual override. The camera pass restores the original geometry and never writes guest RAM.

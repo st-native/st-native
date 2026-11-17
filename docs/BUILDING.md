@@ -90,9 +90,17 @@ opens the latest build log. The individual phase logs and timing file are kept b
 replaces its previous module after it finishes successfully. **Remove cache…** clears launcher-built modules
 after confirmation. The ROM, save files, settings and build logs are stored separately.
 
-The game opens in the same window. **Esc** and **F1** open the same
-pause menu, where you can resume, change display mode or return to the launcher. **F11** switches between
-windowed and fullscreen play directly. Preparation failures point to their log under
+The game opens in the same window. **Screen layout** defaults to **Large + side**, with a large touch screen and
+the full top screen beside it. Portrait windows use the stacked arrangement in this mode. **Classic DS** stacks
+both screens without a gap, **Side by side** gives both screens the same size, and **PiP overlay** places
+the top screen in the upper-right corner. The mouse starts touches only on the DS touch screen.
+
+The launcher groups these options into **Screens**, **Window** and **Game**. **Esc** and **F1** open the pause menu
+with **Screens** and **Window** tabs. **Cutscene view → Full window** renders the pre-title opening with a central
+camera fitted to the window aspect. The projection restores the scene area hidden between the DS screens and
+renders it as one continuous picture without stretching to widescreen. It returns to the selected layout at the title. **Original DS** keeps the
+two original views. **F2** overrides the cinematic view for the current scene.
+**F11** switches between windowed and fullscreen play. Preparation failures point to their log under
 `build/launcher/runs/`. Logs and cached modules are local game-derived artifacts.
 
 This alpha runs from the source checkout with OpenGL 3.3 and the installed Python, Visual Studio Build Tools

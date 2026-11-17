@@ -16,6 +16,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -29,15 +30,52 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr const char* kTitle = "Spirit Tracks Native";
-constexpr int kWidth = 800, kHeight = 560;
+constexpr int kWidth = 800, kHeight = 610;
+
+constexpr std::array kLayoutOptions{
+    std::pair{st::ScreenLayout::focus, "focus"},
+    std::pair{st::ScreenLayout::classic, "classic"},
+    std::pair{st::ScreenLayout::side_by_side, "side-by-side"},
+    std::pair{st::ScreenLayout::picture_in_picture, "pip"},
+};
+
+st::ScreenLayout parse_screen_layout(std::string_view value) {
+    for (const auto& [layout, key] : kLayoutOptions)
+        if (value == key) return layout;
+    return st::ScreenLayout::focus;
+}
+
+const char* layout_value(st::ScreenLayout layout) {
+    for (const auto& [choice, key] : kLayoutOptions)
+        if (choice == layout) return key;
+    return "focus";
+}
+
+bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) {
+    if (!id.starts_with("tab-") || !document.GetElementById(id)) return false;
+    for (const std::string key : {"screens", "window", "game"}) {
+        auto* tab = document.GetElementById("tab-" + key);
+        if (!tab) continue;
+        const bool selected = id == tab->GetId();
+        tab->SetClass("selected", selected);
+        document.GetElementById("settings-" + key)->SetClass("selected", selected);
+    }
+    return true;
+}
 
 struct Preferences {
     // Quoted UTF-8 lets a picker path contain spaces without changing its spelling.
     std::string rom, scale = "2", language = "en", window = "windowed";
+    st::ScreenLayout layout = st::ScreenLayout::focus;
+    bool automatic_join = true;
 
     explicit Preferences(const fs::path& path) {
         std::ifstream file(path, std::ios::binary);
         file >> std::quoted(rom) >> scale >> language >> window;
+        std::string layout_key;
+        if (file >> layout_key) layout = parse_screen_layout(layout_key);
+        std::string join_key;
+        if (file >> join_key) automatic_join = join_key != "manual";
         if (scale != "1" && scale != "2" && scale != "3") scale = "2";
         if (language != "en" && language != "fr" && language != "es") language = "en";
         if (window != "fullscreen") window = "windowed";
@@ -47,7 +85,8 @@ struct Preferences {
         fs::path temp = path;
         temp += ".tmp";
         std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-        file << std::quoted(rom) << '\n' << scale << '\n' << language << '\n' << window << '\n';
+        file << std::quoted(rom) << '\n' << scale << '\n' << language << '\n' << window << '\n'
+             << layout_value(layout) << '\n' << (automatic_join ? "automatic" : "manual") << '\n';
         file.close();
         if (!file) return false;
         std::error_code error;
@@ -66,6 +105,8 @@ public:
         control("scale").SetValue(prefs_.scale);
         control("language").SetValue(prefs_.language);
         control("window-mode").SetValue(prefs_.window);
+        control("screen-layout").SetValue(layout_value(prefs_.layout));
+        control("auto-join").SetValue(prefs_.automatic_join ? "automatic" : "manual");
         document_.AddEventListener(Rml::EventId::Click, this);
         document_.AddEventListener(Rml::EventId::Change, this);
         update_rom_label();
@@ -84,6 +125,8 @@ public:
             prefs_.scale = control("scale").GetValue();
             prefs_.language = control("language").GetValue();
             prefs_.window = control("window-mode").GetValue();
+            prefs_.layout = parse_screen_layout(control("screen-layout").GetValue());
+            prefs_.automatic_join = control("auto-join").GetValue() != "manual";
             persist();
             return;
         }
@@ -91,6 +134,7 @@ public:
         while (target && target->GetId().empty()) target = target->GetParentNode();
         if (!target) return;
         const auto& id = target->GetId();
+        if (select_settings_tab(document_, id)) return;
         if (id == "toggle-steps") {
             show_steps(!steps_visible_);
             return;
@@ -150,7 +194,8 @@ public:
             const auto module = checkout_ / "build/launcher/cache" / module_key_ / "st_game.dll";
             const uint8_t language = prefs_.language == "fr" ? 2 : prefs_.language == "es" ? 5 : 1;
             ready_ = st::GameLaunch{path_from_utf8(prefs_.rom), module, language,
-                                    prefs_.scale[0] - '0', prefs_.window == "fullscreen"};
+                                    prefs_.scale[0] - '0', prefs_.window == "fullscreen", prefs_.layout,
+                                    prefs_.automatic_join};
         } else if (action_ == Action::play && result == 0) {
             show_status("Preparation did not return a game module.", true);
         }
@@ -161,6 +206,15 @@ public:
     void save_display_mode(bool fullscreen) {
         prefs_.window = fullscreen ? "fullscreen" : "windowed";
         control("window-mode").SetValue(prefs_.window);
+        persist();
+    }
+    st::ScreenLayout screen_layout() const { return prefs_.layout; }
+    bool automatic_join() const { return prefs_.automatic_join; }
+    void save_screen_settings(st::ScreenLayout layout, bool automatic_join) {
+        control("screen-layout").SetValue(layout_value(layout));
+        control("auto-join").SetValue(automatic_join ? "automatic" : "manual");
+        prefs_.layout = layout;
+        prefs_.automatic_join = automatic_join;
         persist();
     }
     std::optional<st::GameLaunch> take_launch() { return std::exchange(ready_, std::nullopt); }
@@ -230,7 +284,8 @@ private:
         control("rebuild").SetDisabled(busy() || !verified_);
         control("remove-cache").SetDisabled(busy() || cached_builds_ == 0);
         control("open-log").SetDisabled(run_log_.empty());
-        for (const auto id : {"scale", "language", "window-mode"}) control(id).SetDisabled(busy());
+        for (const auto id : {"scale", "language", "window-mode", "screen-layout", "auto-join"})
+            control(id).SetDisabled(busy());
     }
 
     void show_steps(bool show) {
@@ -393,13 +448,19 @@ public:
     PauseMenu(Rml::Context& context, Rml::ElementDocument& document, LauncherWindow& window, Launcher& launcher)
         : context_(context), document_(document), window_(window), launcher_(launcher) {
         document_.AddEventListener(Rml::EventId::Click, this);
+        document_.AddEventListener(Rml::EventId::Change, this);
     }
 
-    ~PauseMenu() override { document_.RemoveEventListener(Rml::EventId::Click, this); }
+    ~PauseMenu() override {
+        document_.RemoveEventListener(Rml::EventId::Click, this);
+        document_.RemoveEventListener(Rml::EventId::Change, this);
+    }
 
     void open() override {
         action_ = st::PauseAction::stay;
         update_display_button();
+        control("pause-screen-layout").SetValue(layout_value(launcher_.screen_layout()));
+        control("auto-join").SetValue(launcher_.automatic_join() ? "automatic" : "manual");
         document_.Show();
         document_.GetElementById("resume")->Focus();
     }
@@ -415,11 +476,27 @@ private:
         document_.GetElementById("display")->SetAttribute("value", fullscreen() ? "Fullscreen" : "Windowed");
     }
 
+    Rml::ElementFormControl& control(const char* id) {
+        return static_cast<Rml::ElementFormControl&>(*document_.GetElementById(id));
+    }
+
     void ProcessEvent(Rml::Event& event) override {
+        if (event.GetId() == Rml::EventId::Change) {
+            if (document_.IsVisible()) {
+                const auto layout = parse_screen_layout(control("pause-screen-layout").GetValue());
+                const bool automatic_join = control("auto-join").GetValue() != "manual";
+                if (layout != launcher_.screen_layout() || automatic_join != launcher_.automatic_join()) {
+                    window_.set_screen_layout(layout, automatic_join);
+                    launcher_.save_screen_settings(layout, automatic_join);
+                }
+            }
+            return;
+        }
         auto* target = event.GetTargetElement();
         while (target && target->GetId().empty()) target = target->GetParentNode();
         if (!target) return;
         const auto& id = target->GetId();
+        if (select_settings_tab(document_, id)) return;
         if (id == "resume") action_ = st::PauseAction::resume;
         else if (id == "leave") action_ = st::PauseAction::leave;
         else if (id == "display" && SDL_SetWindowFullscreen(window_.window(), !fullscreen())) {
@@ -453,12 +530,14 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
         return Rect{start.x, start.y, start.x + size.x, start.y + size.y};
     };
     constexpr std::array ids{"mark", "game-heading", "rom", "browse", "status", "play", "settings-heading",
-                             "window-mode", "scale", "language", "cache-summary", "rebuild", "remove-cache",
+                             "tab-screens", "tab-window", "tab-game",
+                             "window-mode", "screen-layout", "auto-join", "scale", "language", "cache-summary", "rebuild", "remove-cache",
                              "toggle-steps", "open-log"};
     std::array<Rect, ids.size()> controls{};
     for (size_t i = 0; i < ids.size(); ++i) {
         auto* element = document.GetElementById(ids[i]);
         if (!element) return false;
+        if (!element->IsVisible(true)) continue;
         const auto box = rect(*element);
         if (box.left < 12 * dpi || box.right > bounds.x - 12 * dpi || box.top < 0 ||
             box.right <= box.left || box.bottom <= box.top || (!scrollable && box.bottom > bounds.y + 1)) return false;
@@ -526,10 +605,12 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         const auto properties = SDL_GetWindowProperties(window.window());
         const auto* handle = SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
         if (!handle) return 8;
-        for (bool fullscreen : {false, true}) {
-            game->fullscreen = fullscreen;
+        for (const auto& option : kLayoutOptions) {
+            const auto layout = option.first;
+            game->layout = layout;
+            game->fullscreen = layout == st::ScreenLayout::classic || layout == st::ScreenLayout::picture_in_picture;
             document->Hide();
-            const auto result = st::play_game_in_window(*game, window, pause, 180);
+            const auto result = st::play_game_in_window(*game, window, pause, 300);
             document->Show();
             if (result.exit_code || result.close_requested ||
                 handle != SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) ||
@@ -541,8 +622,13 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         auto preview = [&previews](const char* name) { return previews.empty() ? fs::path{} : previews / name; };
         if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("launcher-wide.bmp")))
             return 2;
-        if (!check_layout(window, *context, *document, 1040, 560, false, false, {})) return 4;
-        if (!check_layout(window, *context, *document, 420, 720, true, false, preview("launcher-compact.bmp"))) return 5;
+        if (!check_layout(window, *context, *document, 1040, 610, false, false, {})) return 4;
+        for (const auto& [tab, field] : {std::pair{"tab-window", "window-mode"}, std::pair{"tab-game", "language"},
+                                         std::pair{"tab-screens", "screen-layout"}}) {
+            document->GetElementById(tab)->DispatchEvent(Rml::EventId::Click, {});
+            if (!window.draw(*context) || !document->GetElementById(field)->IsVisible(true)) return 11;
+        }
+        if (!check_layout(window, *context, *document, 420, 780, true, false, preview("launcher-compact.bmp"))) return 5;
         if (!check_layout(window, *context, *document, 390, 300, true, true, {})) return 6;
         auto* toggle_steps = document->GetElementById("toggle-steps");
         auto* details = document->GetElementById("build-details");
@@ -561,6 +647,22 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("launcher-progress.bmp")) ||
             !check_layout(window, *context, *document, 390, 300, true, true, {})) return 9;
         progress->SetClass("visible", false);
+        // Render both screen layers and change layout through the pause menu without starting a ROM.
+        auto& layout_control = static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("pause-screen-layout"));
+        std::vector<uint32_t> tiles(3 * st::ds_width * st::ds_screen_height, 0xff315374);
+        std::fill(tiles.begin() + st::ds_width * st::ds_screen_height, tiles.end(), 0xff66845c);
+        document->Hide();
+        pause.open();
+        for (const auto& [layout, key] : kLayoutOptions) {
+            layout_control.SetValue(key);
+            if (launcher.screen_layout() != layout || !window.present_game(tiles.data(), false, false, false) ||
+                !pause.draw()) return 10;
+        }
+        pause_document->GetElementById("tab-window")->DispatchEvent(Rml::EventId::Click, {});
+        if (!pause.draw() || !pause_document->GetElementById("display")->IsVisible(true) ||
+            layout_control.IsVisible(true)) return 11;
+        pause.close();
+        document->Show();
         // Exercise the same worker and status updates as the picker with a file we know is not a ROM.
         launcher.verify_rom(path_to_utf8(assets / "launcher.rml"));
         const auto deadline = SDL_GetTicks() + 5000;

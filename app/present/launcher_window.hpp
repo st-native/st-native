@@ -17,8 +17,11 @@ public:
     bool draw_pause(Rml::Context& context);
     void menu_input(Rml::Context& context, SDL_Event& event);
     SDL_Window* window() const override;
-    bool present_game(const uint32_t* pixels) override;
-    bool game_coordinates(float& x, float& y) const override;
+    bool present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) override;
+    double cinematic_aspect() const override;
+    bool game_coordinates(float& x, float& y, bool captured) const override;
+    void set_screen_layout(st::ScreenLayout layout, bool automatic_join) override;
+    void toggle_classic_layout() override;
 
 private:
     bool draw_game();

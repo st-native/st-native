@@ -96,3 +96,56 @@ Bindings are defaults; every one is remappable. "Scheme" items depend on verifie
 
 Open research items: complete list of microphone uses (via `--mic-log`), all scenes that require the top screen,
 every item's exact gesture, train gear detents and any lid use.
+
+## Scenes to check with the desktop layouts
+
+| Moment | Evidence and expected presentation |
+|---|---|
+| Opening before the title and the illustrated new-game prologue | The existing local replays identify these separately. Use gapless Classic DS for shared framing and check the relative timing and order of both screens. The opening and new-game prologue are separate checkpoints in [the boot script](../../tests/rom/boot_new_game.txt). [Nintendo's introduction video via Nintendo Life](https://www.nintendolife.com/news/2009/11/legend_of_zelda_spirit_tracks_intro_video) |
+| Aboda Village, dungeon floors and map editing | The official manual shows the area map above the touch gameplay. The game can bring the map down for annotations and floor selection. Keep it large while editing and route mouse input to the physical Touch Screen. [Nintendo manual, pp. 13, 16–17](https://www.nintendo.com/eu/media/downloads/games_8/emanuals/nintendo_ds_21/Manual_NintendoDS_TheLegendOfZeldaSpiritTracks_EN.pdf) |
+| Signs and the Collection menu | The small message marker directs attention to the top screen. Collection also has its own screen-swap action. Check that both views remain readable and touch stays on the screen the game assigns to the stylus. [Nintendo manual, pp. 14, 18](https://www.nintendo.com/eu/media/downloads/games_8/emanuals/nintendo_ds_21/Manual_NintendoDS_TheLegendOfZeldaSpiritTracks_EN.pdf) |
+| Alfonzo's driving exam and route planning | The rail map shows the junction and traffic while driving. Route drawing moves the map to the Touch Screen. Check both uses at windowed size and in fullscreen. [Nintendo manual, pp. 28–29](https://www.nintendo.com/eu/media/downloads/games_8/emanuals/nintendo_ds_21/Manual_NintendoDS_TheLegendOfZeldaSpiritTracks_EN.pdf) |
+| Spirit Pipes lesson and Gage's duet | The upper view carries guidance and the handoff between players. Compare with equal views so timing and note cues remain legible while the pipes are operated below. [Forest Sanctuary walkthrough](https://gamefaqs.gamespot.com/ds/959019-the-legend-of-zelda-spirit-tracks/faqs/58811) |
+| Fraaz and Carben's rescue | Fraaz's upper map identifies which duplicate has each element. During Carben's rescue the upper screen also needs attention while fighting below. Test whether both cues are legible in Large + side and check Side by side as an equal-size alternative. [Boss and encounter walkthrough](https://gamefaqs.gamespot.com/ds/959019-the-legend-of-zelda-spirit-tracks/faqs/58811) |
+| Cragma and Skeldritch reveals | Proposed visual checkpoints. Compare both views during the boss reveal and the first attack cycle before defining a scene rule. [Recorded boss battles, 11:42 and 19:02](https://www.youtube.com/watch?v=cOsjOOpyBq0) |
+| Malladus with the Bow of Light | The upper view shows Zelda's aim and the crosshair cue while commands and combat remain on the Touch Screen. Compare the two equal-size modes during this phase. [Final-battle walkthrough](https://gamefaqs.gamespot.com/ds/959019-the-legend-of-zelda-spirit-tracks/faqs/58811) |
+
+**Verified for USA/Australia rev. 0.** In a local replay, the pre-title 3D opening used display capture while
+overlays 25 and 102 were resident. The pair stopped at the title after skipping the opening. The illustrated
+prologue and interactive gameplay also use overlay 102, so that overlay alone is insufficient. The opening
+signature was absent after the title in samples taken every 30 frames through the 52,400-frame Castle Town route.
+The frontend uses that verified opening context for the Single screen camera. Locally observed opening projections
+have opposite vertical offsets, each covering a different part of the same view with an omitted interval between
+them. Engine patch 0015 replays the current GX scene with the projection centered and its complete vertical extent
+preserved. The launcher requests a 4:3 camera inside a centered, aspect-preserving game view. Text/palette sprites from both
+physical screens are composed over that camera. Screen-space 3D UI is retained across the alternating scene pair,
+while captured bitmap copies of the old 3D view are excluded. It restores the original geometry
+after rendering. Other contexts keep their existing layouts until their camera semantics are verified.
+
+**Earlier projection-only check, 2026-11-17.** A 6,000-frame unattended opening replay matches every frame's state and RAM
+hash with the cinematic camera disabled, at 16:9 and at 21:9. Each enabled run reframes 5,858 frames. A separate
+1,200-frame script skips to the title and also matches with all three configurations. The camera's projection
+transform is checked with synthetic GX parameters at 4:3, 16:9, 21:9 and 32:9 in the C++ unit tests.
+
+**Verified locally, overlay correction (2026-11-17).** A fresh 6,000-frame opening replay with the 4:3 camera and
+composited UI matches the disabled run's RAM, clock and interpreter counts on every frame. A temporary geometry
+checksum also confirmed restoration after every camera pass. Across frames 2,922–3,100, all 179 monitored 3D UI
+passes contain geometry, alternating between current and one-frame-old UI scenes. Across frames 3,050–3,060,
+the merged 2D foreground is present in all 11 samples although the current foreground alone alternates with an
+empty frame. These are automated coverage checks, not visual approval of every game cutscene. Other split-screen
+scenes remain **Unknown** until individually checked using the reuse procedure in `DUAL_SCREEN_UX.md`.
+
+**Verified locally, reusable geometry check:** a 3,200-frame replay using `--gx-check` and the 4:3 camera matches all
+3,200 guest frame hashes. All 53 periodic geometry reports record zero differences. The camera check uses the same
+original-polygon-list comparison as the engine's GX replay checker; it now also checks restoration after cinematic
+passes. The launcher UI smoke test and its four-layout in-window game smoke test both exit successfully. Full visual
+approval of the corrected logo/prompt composition remains a maintainer review task; no game screenshots are published.
+
+**Verified locally, title UI placement (2026-11-17).** `tests/rom/title_single_screen.txt` exercises the logo reveal,
+visible prompt, touch and transition. The 4,200 guest hashes match both the earlier compositor and the disabled
+camera. All five original dual-screen BMP checkpoints are byte-identical with the camera on/off. All 70 periodic
+GX reports show zero geometry mismatches. At the two stable title/prompt checkpoints, rows 140–191 of the cinematic
+image (prompt and footer) are byte-identical before/after placement. Synthetic compositor tests check identity,
+alpha, invalid rectangles, source corners, aspect ratio and the reserved lower area. Only the opening's extra 3D UI
+image is reduced/repositioned by its game-side profile; 2D text and input retain their coordinates. This is not a
+pixel-lossless merge: the 3D camera is reframed and the current 256×192 output and smaller logo are resampled.

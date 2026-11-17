@@ -74,6 +74,7 @@
 #include "ntr/runtime.hpp"
 #include "game_session.hpp"
 #include "name_keyboard.hpp"
+#include "screen_context.hpp"
 #include "st_hooks.hpp"
 #include "st_probe.hpp"
 #include "utf8_path.hpp"
@@ -105,8 +106,9 @@ struct Options {
     std::string wireless_group, player_name = "Link";
     std::vector<std::pair<uint64_t, std::string>> ram_dumps;
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
-         trace_calls = false, slow_cart = false, fullscreen = false;
+         trace_calls = false, slow_cart = false, fullscreen = false, gx_check = false;
     int scale = 2, cpu_speed = 4;
+    double cinematic_aspect = 0;
     uint64_t exit_after = 0;
     uint8_t language = 1;
 };
@@ -200,7 +202,7 @@ bool parse_script(const fs::path& path, std::vector<Step>& steps, std::string& e
 
 // Both screens, top above bottom, as a 32-bit BMP (the runtime's 0xAARRGGBB is BMP's byte order).
 bool write_bmp(const fs::path& path, const uint32_t* top, const uint32_t* bottom) {
-    const uint32_t w = kW, h = 2 * kH, size = w * h * 4;
+    const uint32_t w = kW, h = bottom ? 2 * kH : kH, size = w * h * 4;
     uint8_t hdr[54] = {'B', 'M'};
     auto put32 = [&](int at, uint32_t v) { std::memcpy(hdr + at, &v, 4); };
     put32(2, 54 + size);
@@ -240,8 +242,9 @@ std::vector<uint8_t> read_file(const fs::path& path) {
 // ---- state shared by the main thread (window, events) and the game thread (runtime)
 struct Shared {
     std::mutex m;
-    std::vector<uint32_t> pixels = std::vector<uint32_t>(kW * kH * 2);
-    bool fresh = false;
+    std::vector<uint32_t> pixels = std::vector<uint32_t>(kW * kH * 3);
+    bool fresh = false, shared_scene = false, cinematic = false;
+    std::atomic<double> cinematic_aspect{0};
     std::atomic<uint32_t> held{0}, pressed{0};
     std::atomic<int> touch_x{0}, touch_y{0};
     std::atomic<bool> touching{false}, fast{false}, quit{false}, done{false};
@@ -258,11 +261,12 @@ void queue_name_text(st::NameKeyboard& keyboard, std::string_view text) {
 
 class StHost : public st::NameHost {
 public:
-    StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes)
-        : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes) {}
+    StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes, bool track_scene)
+        : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes), track_scene_(track_scene) {}
     void attach(ntr::Runtime* rt) { rt_ = rt; }
     uint64_t frames() const { return frame_; }
     uint64_t interp_total() const { return interp_total_; }
+    uint64_t cinematic_frames() const { return cinematic_frames_; }
     void set_audio(SDL_AudioStream* a) { audio_ = a; }
 
     bool on_frame(const ntr::Frame& f) override {
@@ -275,10 +279,17 @@ public:
                          (unsigned long long)f.state_hash, (unsigned long long)f.interp_steps,
                          (unsigned long long)f.ram_hash);
         if (!o_.control.empty() && !control(f)) return false;
+        const bool shared_scene = track_scene_ && screen_context_.update(*rt_, f);
+        const double aspect = o_.cinematic_aspect > 0 ? o_.cinematic_aspect : sh_.cinematic_aspect.load();
+        const auto* cinematic = shared_scene && aspect > 0 ? rt_->render_cinematic(aspect, screen_context_.ui_placement()) : nullptr;
+        cinematic_frames_ += cinematic != nullptr;
         if (!o_.headless && f.top && f.bottom) {
             std::lock_guard<std::mutex> lock(sh_.m);
             std::memcpy(sh_.pixels.data(), f.top, kW * kH * 4);
             std::memcpy(sh_.pixels.data() + kW * kH, f.bottom, kW * kH * 4);
+            sh_.shared_scene = shared_scene;
+            sh_.cinematic = cinematic != nullptr;
+            if (cinematic) std::memcpy(sh_.pixels.data() + 2 * kW * kH, cinematic, kW * kH * 4);
             sh_.fresh = true;
         }
         // The script's steps for this frame; input set now is what the game reads in the next frame.
@@ -302,6 +313,8 @@ public:
                 const fs::path p = o_.shots / (s.name + ".bmp");
                 if (!write_bmp(p, f.top, f.bottom)) std::fprintf(stderr, "cannot write %s\n", p.string().c_str());
                 else std::printf("frame %llu: shot %s\n", (unsigned long long)frame_, p.string().c_str());
+                if (cinematic)
+                    write_bmp(o_.shots / (s.name + "_cinematic.bmp"), cinematic, nullptr);
             } else if (s.kind == Step::Type && frame_ == s.frame) {
                 queue_name_text(name_keyboard, s.name);
             } else if (s.kind == Step::EraseName && frame_ == s.frame) {
@@ -459,9 +472,12 @@ private:
     Shared& sh_;
     std::vector<Step> script_;
     FILE* hashes_;
+    bool track_scene_;
+    st::ScreenContext screen_context_;
     ntr::Runtime* rt_ = nullptr;
     SDL_AudioStream* audio_ = nullptr;
     uint64_t frame_ = 0, interp_total_ = 0, deadline_ = 0;
+    uint64_t cinematic_frames_ = 0;
     static constexpr uint64_t kSaveQuiet = 30;  // half a second without backup writes
     uint64_t run_left_ = 0;   // --control: frames still to run before pausing again
     size_t ctl_lines_ = 0;    // --control: commands read so far
@@ -522,9 +538,17 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--save") o.save = next_path();
         else if (a == "--no-save") o.no_save = true;
         else if (a == "--scale") o.scale = std::max(1, std::atoi(next().c_str()));
+        else if (a == "--cinematic-aspect") {
+            const auto text = next();
+            char* end = nullptr;
+            o.cinematic_aspect = std::strtod(text.c_str(), &end);
+            if (text.empty() || *end || !(o.cinematic_aspect >= 0.5 && o.cinematic_aspect <= 4.0))
+                return std::fprintf(stderr, "--cinematic-aspect needs a ratio from 0.5 to 4.0\n"), false;
+        }
         else if (a == "--fullscreen") o.fullscreen = true;
         else if (a == "--script") o.script = next_path();
         else if (a == "--headless") o.headless = true;
+        else if (a == "--gx-check") o.gx_check = true;
         else if (a == "--exit-after") o.exit_after = std::strtoull(next().c_str(), nullptr, 10);
         else if (a == "--hashes") o.hashes = next_path();
         else if (a == "--shots") o.shots = next_path();
@@ -664,6 +688,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     ro.perf = o.perf;
     ro.trace_threads = o.trace_threads;
     ro.trace_calls = o.trace_calls;
+    ro.gx_check = o.gx_check;
     ro.language = o.language;
     ro.console_name = o.player_name.empty() ? "Link" : o.player_name;
     if (!o.wireless_group.empty()) {  // read by the runtime's local wireless (engine patch 0011)
@@ -675,9 +700,10 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     }
     ro.cpu_speed = o.cpu_speed;
     ro.fast_cart = !o.slow_cart;
+    ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0;
 
     Shared sh;
-    StHost host(o, sh, std::move(script), hashes);
+    StHost host(o, sh, std::move(script), hashes, ro.cinematic_camera);
 
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> owned_window(nullptr, SDL_DestroyWindow);
     std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)> renderer(nullptr, SDL_DestroyRenderer);
@@ -723,13 +749,14 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     });
 
     bool view_error = false;
+    bool saw_shared_scene = false, saw_cinematic = false;
     int test_stage = 0;
     if (!o.headless) {
         uint32_t kb = 0, pad = 0, stick = 0;
         bool mouse_down = false;
         bool menu_open = false;
         uint64_t presented_frames = 0;
-        std::vector<uint32_t> frame(kW * kH * 2);
+        std::vector<uint32_t> frame(kW * kH * 3);
 
         auto change_menu = [&](bool open) {
             kb = pad = stick = 0;
@@ -766,6 +793,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         };
         while (!sh.done) {
             if (presentation) {
+                sh.cinematic_aspect = presentation->cinematic_aspect();
                 const bool edit_name = !menu_open && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) &&
                                        host.name_keyboard.active();
                 if (edit_name && !SDL_TextInputActive(window)) SDL_StartTextInput(window);
@@ -784,6 +812,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         change_menu(!menu_open);
                         continue;
                     }
+                    if (presentation && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                        e.key.scancode == SDL_SCANCODE_F2) {
+                        mouse_down = false;
+                        sh.touching = false;
+                        presentation->toggle_classic_layout();
+                        continue;
+                    }
                     if (menu_open) {
                         menu->input(e);
                         switch (menu->action()) {
@@ -795,6 +830,9 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     }
                     switch (e.type) {
                     case SDL_EVENT_WINDOW_FOCUS_LOST: kb = 0; mouse_down = false; sh.touching = false; sh.fast = false; break;
+                    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                        if (presentation) mouse_down = sh.touching = false;
+                        break;
                     case SDL_EVENT_TEXT_INPUT:
                         if (presentation && SDL_TextInputActive(window)) queue_name_text(host.name_keyboard, e.text.text);
                         break;
@@ -836,17 +874,18 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         if (renderer) SDL_ConvertEventToRenderCoordinates(renderer.get(), &e);
                         float x = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.x : e.button.x;
                         float y = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.y : e.button.y;
-                        if (presentation && !presentation->game_coordinates(x, y)) {
+                        if (presentation && !presentation->game_coordinates(x, y, mouse_down)) {
                             mouse_down = false;
                             sh.touching = false;
                             break;
                         }
+                        if (!presentation) y -= kH;
                         if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT)
-                            mouse_down = x >= 0 && x < kW && y >= kH && y < 2 * kH;
+                            mouse_down = x >= 0 && x < kW && y >= 0 && y < kH;
                         if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT) mouse_down = false;
                         if (mouse_down) {
                             sh.touch_x = std::clamp(int(x), 0, kW - 1);
-                            sh.touch_y = std::clamp(int(y) - kH, 0, kH - 1);
+                            sh.touch_y = std::clamp(int(y), 0, kH - 1);
                         }
                         sh.touching = mouse_down;
                         break;
@@ -869,18 +908,22 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 }
                 continue;
             }
-            bool draw;
+            bool draw, shared_scene = false, cinematic = false;
             {
                 std::lock_guard<std::mutex> lock(sh.m);
                 draw = sh.fresh;
                 if (draw) {
                     frame.swap(sh.pixels);
+                    shared_scene = sh.shared_scene;
+                    cinematic = sh.cinematic;
                     sh.fresh = false;
                 }
             }
             if (!draw) continue;
             if (presentation) {
-                if (!presentation->present_game(frame.data())) view_error = sh.quit = true;
+                saw_shared_scene |= shared_scene;
+                saw_cinematic |= cinematic;
+                if (!presentation->present_game(frame.data(), shared_scene, mouse_down, cinematic)) view_error = sh.quit = true;
             } else {
                 const bool drawn = SDL_UpdateTexture(texture.get(), nullptr, frame.data(), kW * 4) &&
                                    SDL_SetRenderDrawColor(renderer.get(), 0, 0, 0, 255) &&
@@ -894,9 +937,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 if (test_stage == 0 && presented_frames == test_menu_after) {
                     test_key(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
                     test_stage = 1;
+                } else if (test_stage == 2 && presented_frames == test_menu_after + 10) {
+                    test_key(SDL_SCANCODE_F2, SDLK_F2);
                 } else if (test_stage == 2 && presented_frames == test_menu_after + 30) {
                     test_key(SDL_SCANCODE_F1, SDLK_F1);
                     test_stage = 3;
+                } else if (test_stage == 4 && presented_frames == test_menu_after + 40) {
+                    test_key(SDL_SCANCODE_F2, SDLK_F2);
                 } else if (test_stage == 4 && presented_frames == test_menu_after + 60) {
                     sh.quit = true;
                 }
@@ -905,7 +952,9 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     }
     if (presentation && SDL_TextInputActive(window)) SDL_StopTextInput(window);
     game.join();
-    if (!rc && (view_error || (test_menu_after && test_stage != 4))) rc = 1;
+    if (o.cinematic_aspect > 0)
+        std::printf("cinematic: %llu frames reframed\n", (unsigned long long)host.cinematic_frames());
+    if (!rc && (view_error || (test_menu_after && (test_stage != 4 || !saw_shared_scene || !saw_cinematic)))) rc = 1;
     if (hashes) std::fclose(hashes);
     if (!o.record.empty()) {
         std::ofstream rec(o.record);
@@ -948,6 +997,7 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
     o.scale = launch.scale;
     o.fullscreen = launch.fullscreen;
     o.no_save = test_menu_after != 0;
+    presentation.set_screen_layout(launch.layout, launch.automatic_join);
     SDL_Window& window = *presentation.window();
 
     // Resize the existing window for the DS screens and put the launcher back at its previous size on Esc.
@@ -957,8 +1007,9 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
     if (resize && !o.fullscreen) {
         SDL_Rect work_area{};
         const float dpi = SDL_GetWindowDisplayScale(&window);
-        const int desired_width = int(kW * o.scale * dpi);
-        const int desired_height = int(2 * kH * o.scale * dpi);
+        const auto size = initial_screen_size(launch.layout);
+        const int desired_width = int(size.width * o.scale * dpi);
+        const int desired_height = int(size.height * o.scale * dpi);
         if (SDL_GetDisplayUsableBounds(SDL_GetDisplayForWindow(&window), &work_area))
             SDL_SetWindowSize(&window, std::min(desired_width, work_area.w), std::min(desired_height, work_area.h));
     }

@@ -15,13 +15,7 @@ void update_minimum_size(SDL_Window* window) {
     SDL_SetWindowMinimumSize(window, int(360 * scale), int(280 * scale));
 }
 
-constexpr int kDsWidth = st::ds_width, kDsHeight = 2 * st::ds_screen_height;
-
-SDL_Rect game_viewport(int width, int height) {
-    const int w = std::min(width, height * kDsWidth / kDsHeight);
-    const int h = std::min(height, width * kDsHeight / kDsWidth);
-    return {(width - w) / 2, (height - h) / 2, w, h};
-}
+constexpr int kDsWidth = st::ds_width, kTextureHeight = 3 * st::ds_screen_height;
 
 bool save_preview(int width, int height, const char* path) {
     std::unique_ptr<SDL_Surface, decltype(&SDL_DestroySurface)> image(
@@ -46,11 +40,20 @@ struct LauncherWindow::State {
     Rml::Context* pumping_context = nullptr;
     GLuint game_framebuffer = 0;
     GLuint game_texture = 0;
+    st::ScreenLayout layout = st::ScreenLayout::focus;
+    bool automatic_join = true, shared_scene = false, classic_override = false, cinematic = false;
+
+    bool show_cinematic() const { return cinematic && shared_scene && (automatic_join != classic_override); }
+
+    st::ScreenViews views(int width, int height) const {
+        return st::screen_views(st::effective_screen_layout(layout, automatic_join, shared_scene, classic_override),
+                                width, height);
+    }
 
     bool create_game_target() {
         glGenTextures(1, &game_texture);
         glBindTexture(GL_TEXTURE_2D, game_texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kDsWidth, kDsHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kDsWidth, kTextureHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
         glGenFramebuffers(1, &game_framebuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, game_framebuffer);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, game_texture, 0);
@@ -157,18 +160,22 @@ bool LauncherWindow::draw(Rml::Context& context, const char* preview_path) {
     return SDL_GL_SwapWindow(window()) && saved;
 }
 
-bool LauncherWindow::present_game(const uint32_t* pixels) {
+bool LauncherWindow::present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) {
+    if (!touch_captured && state_->shared_scene != shared_scene) {
+        state_->shared_scene = shared_scene;
+        if (state_->automatic_join) state_->classic_override = false;
+    }
+    state_->cinematic = cinematic;
     if (!state_->game_framebuffer && !state_->create_game_target()) return false;
     glBindTexture(GL_TEXTURE_2D, state_->game_texture);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kDsWidth, kDsHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kDsWidth, kTextureHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
     return draw_game() && SDL_GL_SwapWindow(window());
 }
 
 bool LauncherWindow::draw_game() {
     int width, height;
     if (!SDL_GetWindowSizeInPixels(window(), &width, &height)) return false;
-    const auto view = game_viewport(width, height);
-    if (view.w <= 0 || view.h <= 0) return true;
+    if (width <= 0 || height <= 0) return true;
 
     // Keep the launcher's OpenGL context and native swap surface for both views.
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -178,9 +185,24 @@ bool LauncherWindow::draw_game() {
     glClear(GL_COLOR_BUFFER_BIT);
     if (!state_->game_framebuffer) return true;
     glBindFramebuffer(GL_READ_FRAMEBUFFER, state_->game_framebuffer);
-    // The CPU pixels are top-down. Flip when copying the texture to the window.
-    glBlitFramebuffer(0, kDsHeight, kDsWidth, 0, view.x, height - view.y - view.h,
-                      view.x + view.w, height - view.y, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    if (state_->show_cinematic()) {
+        const auto view = st::cinematic_view(width, height);
+        glBlitFramebuffer(0, kTextureHeight, kDsWidth, 2 * st::ds_screen_height,
+                          view.x, height - view.y - view.height, view.x + view.width, height - view.y,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        return true;
+    }
+    const auto views = state_->views(width, height);
+    const auto blit = [height](const st::ScreenRect& view, int source_y) {
+        if (view.width <= 0 || view.height <= 0) return;
+        // The CPU pixels are top-down. Flip each screen while copying it.
+        glBlitFramebuffer(0, source_y + st::ds_screen_height, kDsWidth, source_y,
+                          view.x, height - view.y - view.height, view.x + view.width, height - view.y,
+                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    };
+    blit(views.touch, st::ds_screen_height);
+    blit(views.top, 0);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     return true;
 }
@@ -205,13 +227,32 @@ bool LauncherWindow::draw_pause(Rml::Context& context) {
     return SDL_GL_SwapWindow(window());
 }
 
-bool LauncherWindow::game_coordinates(float& x, float& y) const {
+bool LauncherWindow::game_coordinates(float& x, float& y, bool captured) const {
     int width, height, pixels_w, pixels_h;
     if (!SDL_GetWindowSize(window(), &width, &height) || width <= 0 || height <= 0 ||
         !SDL_GetWindowSizeInPixels(window(), &pixels_w, &pixels_h)) return false;
-    const auto view = game_viewport(pixels_w, pixels_h);
-    if (view.w <= 0 || view.h <= 0) return false;
-    x = (x * pixels_w / width - view.x) * kDsWidth / view.w;
-    y = (y * pixels_h / height - view.y) * kDsHeight / view.h;
-    return true;
+    x *= float(pixels_w) / width;
+    y *= float(pixels_h) / height;
+    if (state_->show_cinematic()) {
+        return st::to_touch({{}, st::cinematic_view(pixels_w, pixels_h)}, x, y, captured);
+    }
+    return st::to_touch(state_->views(pixels_w, pixels_h), x, y, captured);
+}
+
+void LauncherWindow::set_screen_layout(st::ScreenLayout layout, bool automatic_join) {
+    state_->layout = layout;
+    state_->automatic_join = automatic_join;
+    state_->classic_override = false;
+}
+
+void LauncherWindow::toggle_classic_layout() {
+    state_->classic_override = !state_->classic_override;
+}
+
+double LauncherWindow::cinematic_aspect() const {
+    if (state_->automatic_join == state_->classic_override) return 0;
+    int width, height;
+    if (!SDL_GetWindowSizeInPixels(window(), &width, &height) || width <= 0 || height <= 0) return 0;
+    const auto view = st::cinematic_view(width, height);
+    return view.width > 0 && view.height > 0 ? double(view.width) / view.height : 0;
 }

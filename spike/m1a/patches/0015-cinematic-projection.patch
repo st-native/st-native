@@ -1,0 +1,575 @@
+Render an off-axis cinematic camera from a recorded GX scene.
+
+Reuses upstream GX replay and a separate software rasterizer. The host chooses
+when to use it and the target aspect. The original scene is restored after rendering.
+Keeps screen-space 3D UI across alternating scenes and composes text/palette OBJ
+from both 2D engines, excluding captured bitmap copies of the old 3D view.
+The optional compositor tap is owned through NDS userdata, without global state.
+
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -2,6 +2,7 @@
+ // which emulates the rest of the console (ARM7, video, sound, timers, DMA, cartridge, Wi-Fi).
+ #pragma once
+ 
++#include "ntr/cinematic.hpp"
+ #include <array>
+ #include <cstddef>
+ #include <cstdint>
+@@ -104,6 +105,7 @@
+     bool trace_calls = false;
+     bool trace_threads = false;
+     bool perf = false;         // log emulation cost and interpreter use every 60 frames
++    bool cinematic_camera = false; // retain GX scenes for host-requested off-axis camera recentering
+     bool fps_probe = false;    // log how often the game makes a new 3D frame, display capture and 3D screen use
+     bool gx_probe = false;     // log how well each 3D scene's GX command stream matches the previous one
+     bool gx_check = false;     // replay each 3D scene's GX commands and check the polygon list comes out the same
+@@ -166,6 +168,11 @@
+     // the current one, its 3D blended between the game's last two scenes. Returns a GL texture laid out like
+     // Frame::gl_texture (valid until the next call), or 0 when the current frame is the one to show.
+     virtual unsigned render_between(double x) = 0;
++
++    // Game-thread-only optional camera. Returns a 256x192 BGRA picture with projection fitted to aspect,
++    // valid until the next call, or null when the recorded scene cannot be reframed. `ui` places only its
++    // screen-space 3D overlay; the camera and original screens are not affected by that placement.
++    virtual const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}) = 0;
+ };
+ 
+ // The message of the last fatal error ("" if there was none). A crash report quotes it: the log may not have it yet.
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -1,6 +1,7 @@
+ // Internal runtime state shared by the service implementations (runtime.cpp, swi.cpp, nitro.cpp).
+ #pragma once
+ 
++#include <array>
+ #include <chrono>
+ #include <cstdint>
+ #include <memory>
+@@ -17,6 +18,8 @@
+ #include "ntr/runtime.hpp"
+ 
+ namespace ntr {
++
++class CinematicRenderer;
+ 
+ using u8 = uint8_t;
+ using u16 = uint16_t;
+@@ -64,6 +67,9 @@
+     void set_fast_cart(bool on) override;
+     void set_cpu_speed(int multiplier) override { pending_cpu_speed_ = multiplier; }
+     unsigned render_between(double x) override;
++    const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}) override;
++    static void capture_overlay_line(void* context, const melonDS::GPU2D& engine, u32 line,
++                                      const u32* foreground, const u32* composite);
+ 
+     // ---- services for recompiled code ----
+     u32 bus_read32(u32 a);
+@@ -198,6 +204,9 @@
+     // GX command streams: frame interpolation, --gx-probe, --gx-check.
+     std::unique_ptr<gx::Streams> gx_;
+     std::unique_ptr<GlBetween> between_;  // frames between emulated frames (display_rate)
++    std::unique_ptr<CinematicRenderer> cinematic_renderer_;
++    std::array<std::vector<uint32_t>, 2> overlay_pixels_, previous_overlay_pixels_;
++    uint64_t last_cinematic_frame_ = 0;
+     double perf_host_s_ = 0, perf_max_s_ = 0;
+     u64 perf_steps_mark_ = 0, perf_calls_mark_ = 0;
+ };
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -17,12 +17,44 @@
+ #include "NDSCart.h"
+ #include "SPU.h"
+ #include "gx_hook.hpp"
++#include "cinematic_overlay.hpp"
+ #include "local_wireless.hpp"
+ #include "ntr/hash.hpp"
+ #include "ntr/rom.hpp"
+ #include "runtime_internal.hpp"
+ 
+ namespace ntr {
++
++class CinematicRenderer final : public melonDS::SoftRenderer {
++public:
++    explicit CinematicRenderer(melonDS::NDS& nds) : SoftRenderer(nds), pixels_(256 * 192) { Reset(); }
++
++    const uint32_t* render(bool overlay, CinematicUiPlacement ui) {
++        Start3DRendering();
++        Finish3DRendering();
++        const auto brightness = GPU.MasterBrightnessA;
++        if (overlay) {
++            composite_cinematic_ui(pixels_.data(), [&](int y) { return Rend3D->GetLine(y); }, ui, brightness);
++        } else {
++            for (int y = 0; y < 192; ++y) {
++                const auto* line = Rend3D->GetLine(y);
++                for (int x = 0; x < 256; ++x)
++                    pixels_[size_t(y) * 256 + x] = cinematic_argb6(line[x], brightness);
++            }
++        }
++        return pixels_.data();
++    }
++
++    const uint32_t* add_overlays(const std::array<std::vector<uint32_t>, 2>& overlays) {
++        for (const auto& overlay : overlays)
++            for (size_t i = 0; i < pixels_.size(); ++i)
++                if (overlay[i] >> 24) pixels_[i] = overlay[i];
++        return pixels_.data();
++    }
++
++private:
++    std::vector<uint32_t> pixels_;
++};
+ 
+ using melonDS::CPUExecuteMode;
+ 
+@@ -151,13 +183,19 @@
+     nds->SetupDirectBoot("game.nds");
+     nds->Start();
+     apply_video(options.video);
+-    if ((options.gx_probe || options.gx_check || options.gx_dump_at_frame) && !gx_) gx_ = std::make_unique<gx::Streams>(nds->GPU.GPU3D);
++    if ((options.gx_probe || options.gx_check || options.gx_dump_at_frame || options.cinematic_camera) && !gx_)
++        gx_ = std::make_unique<gx::Streams>(nds->GPU.GPU3D);
+     if (gx_) {
++        gx_->cinematic = options.cinematic_camera;
+         gx_->probe = options.gx_probe;
+         gx_->check = options.gx_check;
+         gx_->dump_at_vblank = options.gx_dump_at_frame;
+         gx_->interpolate = video_.interpolate && !video_.display_rate && !options.gx_check;
+         gx_->display_rate = video_.display_rate && !options.gx_check;
++    }
++    if (options.cinematic_camera) {
++        for (auto& pixels : overlay_pixels_) pixels.resize(256 * 192);
++        for (auto& pixels : previous_overlay_pixels_) pixels.resize(256 * 192);
+     }
+ 
+     read_pages_.assign(1u << 20, nullptr);
+@@ -411,6 +449,8 @@
+         quit_ = true;
+         fiber_switch(fibers_[current_fiber_].fiber, root_fiber_);
+     }
++    std::swap(overlay_pixels_, previous_overlay_pixels_);
++    for (auto& pixels : overlay_pixels_) std::fill(pixels.begin(), pixels.end(), 0);
+     // The input the host set during on_frame, which ends when the next frame is due: the freshest sample for the
+     // frame about to run.
+     // (Half a second without the game reading the keys counts as a read, so that no button can stay stuck.)
+@@ -643,6 +683,33 @@
+ 
+ // ---------------------------------------------------------------------------------------------------------------
+ // Calls
++
++const uint32_t* RuntimeImpl::render_cinematic(double aspect, CinematicUiPlacement ui) {
++    if (!gx_ || !options.cinematic_camera) return nullptr;
++    if (!cinematic_renderer_) cinematic_renderer_ = std::make_unique<CinematicRenderer>(*nds);
++    nds->GetRenderer().PreSavestate();
++    const bool rendered = gx_->render_cinematic(aspect, [&](bool overlay) { cinematic_renderer_->render(overlay, ui); });
++    nds->GetRenderer().PostSavestate();
++    if (!rendered) return nullptr;
++    if (last_cinematic_frame_ + 1 == frames_) cinematic_renderer_->add_overlays(previous_overlay_pixels_);
++    last_cinematic_frame_ = frames_;
++    return cinematic_renderer_->add_overlays(overlay_pixels_);
++}
++
++void RuntimeImpl::capture_overlay_line(void* context, const melonDS::GPU2D& engine, u32 line,
++                                       const u32* foreground, const u32* composite) {
++    if (!context || line >= 192) return;
++    auto& runtime = *static_cast<RuntimeImpl*>(context);
++    if (!runtime.options.cinematic_camera) return;
++    const auto& gpu = runtime.nds->GPU;
++    const unsigned screen = gpu.ScreenSwap ? engine.Num : 1 - engine.Num;
++    auto* output = runtime.overlay_pixels_[screen].data() + line * 256;
++    const auto brightness = engine.Num ? gpu.MasterBrightnessB : gpu.MasterBrightnessA;
++    for (unsigned x = 0; x < 256; ++x)
++        output[x] = cinematic_overlay_pixel(foreground[x] >> 24, engine.DispCnt & 7,
++                                            engine.BGCnt[2], engine.BGCnt[3])
++            ? cinematic_argb6(composite[x], brightness) : 0;
++}
+ 
+ bool RuntimeImpl::overlay_resident(const NtrOverlayInfo& ov) {
+     for (u32 i = 0; i < ov.nprobes; i++)
+@@ -1084,3 +1151,11 @@
+ }
+ 
+ }  // extern "C"
++
++// The configure-time compositor tap uses the owning NDS's userdata; no mutable global callback slot.
++namespace melonDS {
++void FfccOverlayLine(void* context, const GPU2D& engine, u32 line,
++                     const u32* foreground, const u32* composite) {
++    ntr::RuntimeImpl::capture_overlay_line(context, engine, line, foreground, composite);
++}
++} // namespace melonDS
+--- a/runtime/src/gx_stream.hpp
++++ b/runtime/src/gx_stream.hpp
+@@ -33,6 +33,7 @@
+     bool check = false;        // --gx-check: replay every scene unchanged and compare the polygon lists
+     bool interpolate = false;  // show a blended scene on frames where a new one arrives
+     bool display_rate = false; // keep the last two scenes for render_between()
++    bool cinematic = false; // retain the latest scene for a separately rendered camera
+     uint64_t dump_at_vblank = 0;  // debugging: write the first scene swapped in at or after this VBlank to a file
+ 
+     // 3D at the display's refresh rate, between emulated frames. A displayed frame `x` (0 to 1) of an emulated frame
+@@ -41,6 +42,7 @@
+     // next one, as with 60 Hz interpolation). Makes that the render list, calls `render`, and puts the real render
+     // list back. Returns what `render` returned, or 0 when there is nothing to blend (the emulated frame is current).
+     uint32_t render_between(double x, const std::function<uint32_t()>& render);
++    bool render_cinematic(double aspect, const std::function<void(bool overlay)>& render);
+ 
+     // Logs the statistics every 60 frames.
+     void report(uint64_t frame);
+@@ -57,7 +59,8 @@
+     void interpolate_scene(const Scene& prev, const Scene& scene);
+     // Runs `entries` from `scene`'s start state through the geometry engine and makes the result the render list,
+     // keeping the rest of the engine's state as it was. restore_real() brings back the real render list.
+-    void replay(const Scene& scene, const std::vector<Entry>& entries);
++    // projection_filter: 0 = unchanged, 1 = split-camera world, 2 = screen-space UI.
++    void replay(const Scene& scene, const std::vector<Entry>& entries, int projection_filter = 0);
+     void restore_real();
+ 
+     melonDS::GPU3D& g_;
+@@ -71,7 +74,7 @@
+     std::vector<melonDS::Vertex> real_vertices_;
+     std::vector<melonDS::Polygon> real_polygons_;
+     std::array<melonDS::Polygon*, 2048> real_list_{};
+-    uint32_t real_count_ = 0, real_bank_ = 0;
++    uint32_t real_count_ = 0, real_vertex_base_ = 0, real_polygon_base_ = 0;
+     bool restore_pending_ = false;
+ 
+     // Statistics since the last report.
+--- a/runtime/src/gx_stream.cpp
++++ b/runtime/src/gx_stream.cpp
+@@ -7,6 +7,7 @@
+ #include <utility>
+ 
+ #include "gx_hook.hpp"
++#include "cinematic_projection.hpp"
+ #include "runtime_internal.hpp"
+ 
+ namespace ntr::gx {
+@@ -107,7 +108,7 @@
+ void Streams::vblank_hook(void* self, bool flushed) { static_cast<Streams*>(self)->on_vblank(flushed); }
+ 
+ void Streams::on_command(uint8_t op, uint32_t param) {
+-    if (current_.entries.empty() && (check || interpolate || display_rate)) save_state(g_, current_.start);
++    if (current_.entries.empty() && (check || interpolate || display_rate || cinematic)) save_state(g_, current_.start);
+     current_.entries.push_back({op, param});
+     if (op != 0x50) return;
+     // (The flush itself has not run yet; everything before it has.)
+@@ -138,7 +139,7 @@
+         if (flushed && check && !scene.start.empty()) check_replay(scene);
+         else if (flushed && interpolate && !scene.start.empty()) interpolate_scene(prev_, scene);
+     }
+-    if (display_rate) {
++    if (display_rate || cinematic) {
+         older_ = std::move(prev_);
+         have_older_ = have_prev_ && prev_flushed_;
+     }
+@@ -150,16 +151,20 @@
+ // ---------------------------------------------------------------------------------------------------------------
+ // Replay
+ 
+-void Streams::replay(const Scene& scene, const std::vector<Entry>& entries) {
++void Streams::replay(const Scene& scene, const std::vector<Entry>& entries, int projection_filter) {
+     const auto t0 = std::chrono::steady_clock::now();
+     // Keep what the replay overwrites: the engine state, and the real scene in vertex/polygon RAM (it was built in
+     // the bank the engine is no longer building in).
+     save_state(g_, post_);
+-    real_bank_ = g_.CurRAMBank ? 0 : 1;
+-    melonDS::Vertex* vram = &g_.VertexRAM[real_bank_ ? 6144 : 0];
+-    melonDS::Polygon* pram = &g_.PolygonRAM[real_bank_ ? 2048 : 0];
+-    real_vertices_.assign(vram, vram + std::min<uint32_t>(scene.num_vertices, 6144));
+-    real_polygons_.assign(pram, pram + std::min<uint32_t>(scene.num_polygons, 2048));
++    const uint32_t bank = g_.CurRAMBank ? 0 : 1;
++    // A retained UI scene may replay into the other bank, including geometry the guest is still
++    // building. Preserve both complete banks for an extra camera pass, not only the displayed list.
++    real_vertex_base_ = projection_filter ? 0 : bank * 6144;
++    real_polygon_base_ = projection_filter ? 0 : bank * 2048;
++    melonDS::Vertex* vram = &g_.VertexRAM[real_vertex_base_];
++    melonDS::Polygon* pram = &g_.PolygonRAM[real_polygon_base_];
++    real_vertices_.assign(vram, vram + (projection_filter ? 12288 : std::min<uint32_t>(scene.num_vertices, 6144)));
++    real_polygons_.assign(pram, pram + (projection_filter ? 4096 : std::min<uint32_t>(scene.num_polygons, 2048)));
+     real_list_ = g_.RenderPolygonRAM;
+     real_count_ = g_.RenderNumPolygons;
+ 
+@@ -171,14 +176,42 @@
+     g_.CmdStallQueue.Clear();
+     g_.ExecParamCount = 0;
+     melonDS::FfccGxReplaying = true;
+-    for (const Entry& e : entries) {
++    std::array<bool, 2048> selected{};
++    const auto* polygon_base = g_.CurPolygonRAM;
++    uint32_t mode = 0;
++    bool centered = false;
++    size_t command_end = 0;
++    for (size_t i = 0; i < entries.size(); ++i) {
++        const auto& e = entries[i];
++        const bool command_start = i == command_end;
++        if (command_start) command_end = i + size_t(entry_count(e.op));
++        if (projection_filter && command_start) {
++            if (e.op == 0x10) mode = e.param & 3;
++            // Consult the original projection, before the world camera is recentered.
++            if (e.op == 0x16 && mode == 0)
++                centered = centered_projection_at(scene.entries, i);
++        }
++        const auto previous_polygons = g_.NumPolygons;
+         CmdEntry c{};
+         c.Command = e.op;
+         c.Param = e.param;
+         g_.CmdPIPE.Write(c);
+         g_.ExecuteCommand();
++        if (projection_filter)
++            for (auto p = previous_polygons; p < g_.NumPolygons && p < selected.size(); ++p)
++                selected[p] = projection_filter == 2 ? centered : !centered;
+     }
+     g_.VBlank();
++    if (projection_filter) {
++        uint32_t output = 0;
++        for (uint32_t i = 0; i < g_.RenderNumPolygons; ++i) {
++            const auto* p = g_.RenderPolygonRAM[i];
++            const auto index = p - polygon_base;
++            if (index >= 0 && size_t(index) < selected.size() && selected[size_t(index)])
++                g_.RenderPolygonRAM[output++] = g_.RenderPolygonRAM[i];
++        }
++        g_.RenderNumPolygons = output;
++    }
+     melonDS::FfccGxReplaying = false;
+     const std::array<melonDS::Polygon*, 2048> list = g_.RenderPolygonRAM;
+     const uint32_t count = g_.RenderNumPolygons;
+@@ -192,8 +225,8 @@
+ }
+ 
+ void Streams::restore_real() {
+-    std::copy(real_vertices_.begin(), real_vertices_.end(), &g_.VertexRAM[real_bank_ ? 6144 : 0]);
+-    std::copy(real_polygons_.begin(), real_polygons_.end(), &g_.PolygonRAM[real_bank_ ? 2048 : 0]);
++    std::copy(real_vertices_.begin(), real_vertices_.end(), &g_.VertexRAM[real_vertex_base_]);
++    std::copy(real_polygons_.begin(), real_polygons_.end(), &g_.PolygonRAM[real_polygon_base_]);
+     g_.RenderPolygonRAM = real_list_;
+     g_.RenderNumPolygons = real_count_;
+     g_.RenderFrameIdentical = false;  // render it again: the last frame showed the replayed list
+@@ -265,6 +298,42 @@
+     return out;
+ }
+ 
++bool Streams::render_cinematic(double aspect, const std::function<void(bool)>& render) {
++    if (!have_prev_ || !prev_flushed_ || prev_.start.empty() || restore_pending_) return false;
++    auto entries = prev_.entries;
++    if (!center_split_projection(entries, aspect)) return false;
++    const auto original = check ? hash_render_list(g_) : 0;
++    const bool identical = g_.RenderFrameIdentical;
++    replay(prev_, entries, 1);
++    render(false);
++    restore_real();
++    restore_pending_ = false;
++    // Screen-space 3D UI can exist only on one of two alternating screen scenes. Use the freshest
++    // scene containing that UI, expiring it with the next pair so a removed logo cannot linger.
++    const Scene* ui = nullptr;
++    if (has_centered_projection(prev_.entries)) ui = &prev_;
++    else if (have_older_ && prev_.vblank - older_.vblank <= 2 &&
++             has_centered_projection(older_.entries)) ui = &older_;
++    if (ui) {
++        replay(*ui, ui->entries, 2);
++        const auto clear = g_.RenderClearAttr1;
++        const auto control = g_.RenderDispCnt;
++        g_.RenderClearAttr1 = 0;
++        g_.RenderDispCnt &= ~(1u << 14); // transparent clear, without the rear-plane bitmap
++        render(true);
++        g_.RenderClearAttr1 = clear;
++        g_.RenderDispCnt = control;
++        restore_real();
++        restore_pending_ = false;
++    }
++    g_.RenderFrameIdentical = identical;
++    if (check) {
++        ++checked_;
++        check_failed_ += hash_render_list(g_) != original;
++    }
++    return true;
++}
++
+ // ---------------------------------------------------------------------------------------------------------------
+ // Statistics
+ 
+--- a/runtime/src/gx_hook.hpp
++++ b/runtime/src/gx_hook.hpp
+@@ -5,6 +5,10 @@
+ #include "types.h"
+ 
+ namespace melonDS {
++class GPU2D;
++// Optional 2D foreground tap, owned through NDS::UserData (no process-wide mutable callback).
++void FfccOverlayLine(void* context, const GPU2D& engine, u32 line,
++                     const u32* foreground, const u32* composite);
+ // Called for every GX command FIFO entry the geometry engine executes (not while replaying).
+ extern void (*FfccGxCommandHook)(void* context, u8 command, u32 param);
+ // Called at the end of every VBlank; `flushed` when it swapped in a new polygon list (not while replaying).
+--- a/third_party/CMakeLists.txt
++++ b/third_party/CMakeLists.txt
+@@ -26,6 +26,15 @@
+   message(FATAL_ERROR "third_party/melonDS is missing: run `git submodule update --init --recursive`")
+ endif()
+ set(MS ${MELONDS_DIR}/src)
++
++# The software compositor exposes the visible 2D foreground for optional extra camera views.
++file(READ ${MS}/GPU2D_Soft.cpp gpu2d_overlay_src)
++string(REPLACE "\r\n" "\n" gpu2d_overlay_src "${gpu2d_overlay_src}")
++ffcc_patch(gpu2d_overlay_src GPU2D_Soft.cpp "namespace melonDS\n{\n"
++  "#include \"NDS.h\"\nnamespace melonDS\n{\nvoid FfccOverlayLine(void*, const GPU2D&, u32, const u32*, const u32*);\n")
++ffcc_patch(gpu2d_overlay_src GPU2D_Soft.cpp "        dst[i] = ColorComposite(i, val1, val2);\n    }\n"
++  "        dst[i] = ColorComposite(i, val1, val2);\n    }\n    FfccOverlayLine(GPU.NDS.UserData, GPU2D, line, BGOBJLine, dst);\n")
++ffcc_write_patched(gpu2d_overlay_src ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/GPU2D_Soft.cpp)
+ 
+ # GPU3D.cpp: hooks that see every GX command the geometry engine executes and every VBlank (for frame interpolation,
+ # which records each scene's command stream and swaps in a blended polygon list), and a replay mode in which the
+@@ -165,7 +174,7 @@
+   ${MS}/CRC32.cpp ${MS}/DMA.cpp ${MS}/DMA_Timings.cpp ${MS}/DSi.cpp ${MS}/DSi_AES.cpp ${MS}/DSi_Camera.cpp
+   ${MS}/DSi_DSP.cpp ${MS}/DSi_I2C.cpp ${MS}/DSi_I2S.cpp ${MS}/DSi_NAND.cpp ${MS}/DSi_NDMA.cpp ${MS}/DSi_NWifi.cpp
+   ${MS}/DSi_SD.cpp ${MS}/DSi_SPI_TSC.cpp ${MS}/FATIO.cpp ${MS}/FATStorage.cpp ${MS}/GBACart.cpp
+-  ${MS}/GBACartMotionPak.cpp ${MS}/GPU.cpp ${MS}/GPU_Soft.cpp ${MS}/GPU2D.cpp ${MS}/GPU2D_Soft.cpp ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/GPU3D.cpp
++  ${MS}/GBACartMotionPak.cpp ${MS}/GPU.cpp ${MS}/GPU_Soft.cpp ${MS}/GPU2D.cpp ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/GPU2D_Soft.cpp ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/GPU3D.cpp
+   ${MS}/GPU3D_Soft.cpp ${MS}/GPU3D_Texcache.cpp ${MS}/Mic.cpp ${MS}/NDS.cpp ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/NDSCart.cpp ${MS}/ROMList.cpp
+   ${MS}/FreeBIOS.cpp ${MS}/RTC.cpp ${MS}/Savestate.cpp ${MS}/SPI.cpp ${MS}/SPI_Firmware.cpp ${MS}/SPU.cpp
+   ${MS}/Utils.cpp ${MS}/Wifi.cpp ${MS}/WifiAP.cpp
+--- /dev/null
++++ b/runtime/src/cinematic_projection.hpp
+@@ -0,0 +1,60 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include <cmath>
++#include <cstdint>
++#include <vector>
++
++#include "gx_match.hpp"
++
++namespace ntr::gx {
++
++// In a host-verified split-camera composition, treat centered projections as screen-space UI.
++// This is not a scene detector; the host must opt in only where that interpretation is valid.
++inline bool centered_projection_at(const std::vector<Entry>& entries, size_t i) {
++    return i + 16 <= entries.size() && entries[i].op == 0x16 && entries[i + 9].param == 0 &&
++        ((entries[i + 11].param == 0 && entries[i + 15].param != 0) ||
++         (entries[i + 15].param == 0 && int32_t(entries[i + 11].param) < 0));
++}
++
++inline bool has_centered_projection(const std::vector<Entry>& entries) {
++    uint32_t mode = 0;
++    for (size_t i = 0; i < entries.size();) {
++        const auto count = size_t(entry_count(entries[i].op));
++        if (i + count > entries.size()) return false;
++        if (entries[i].op == 0x10) mode = entries[i].param & 3;
++        if (mode == 0 && centered_projection_at(entries, i)) return true;
++        i += count;
++    }
++    return false;
++}
++
++// A pair of off-axis frusta covers [-1-offset, 1+offset] vertically. Recenter the perspective
++// and include that complete extent, with the horizontal focal length derived from the target aspect.
++inline bool center_split_projection(std::vector<Entry>& entries, double aspect) {
++    if (!std::isfinite(aspect) || aspect < 0.5 || aspect > 4.0) return false;
++    uint32_t mode = 0;
++    bool changed = false;
++    for (size_t i = 0; i < entries.size();) {
++        const auto op = entries[i].op;
++        const size_t count = size_t(entry_count(op));
++        if (i + count > entries.size()) return false;
++        if (op == 0x10) mode = entries[i].param & 3;
++        if (mode == 0 && op == 0x16) {
++            const auto signed_param = [&](size_t index) { return int32_t(entries[i + index].param); };
++            if (signed_param(11) == -4096 && signed_param(15) == 0 && signed_param(9) != 0 &&
++                signed_param(0) > 0 && signed_param(5) > 0) {
++                const double height = 1.0 + std::abs(double(signed_param(9))) / 4096.0;
++                const auto vertical = int32_t(std::lround(signed_param(5) / height));
++                entries[i].param = uint32_t(int32_t(std::lround(vertical / aspect)));
++                entries[i + 5].param = uint32_t(vertical);
++                entries[i + 8].param = entries[i + 9].param = 0;
++                changed = true;
++            }
++        }
++        i += count;
++    }
++    return changed;
++}
++
++} // namespace ntr::gx
+--- /dev/null
++++ b/runtime/src/cinematic_overlay.hpp
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++
++#include "ntr/cinematic.hpp"
++
++namespace ntr {
++
++// Provenance bits supplied by the software 2D compositor, before master brightness.
++// The captured 3D view can be displayed as a bitmap BG or bitmap OBJ. Neither belongs
++// over a separately rerendered camera. Text BGs and ordinary/palette OBJ do.
++inline bool cinematic_overlay_pixel(unsigned flag, unsigned mode, unsigned bg2, unsigned bg3) {
++    if (flag & 0x40) return false; // live 3D or direct-color bitmap OBJ
++    if (flag & 0x90) return true; // opaque or translucent palette OBJ
++    unsigned bitmap = 0;
++    if (mode >= 3 && mode <= 5 && (bg3 & 0x80)) bitmap |= 8;
++    if ((mode == 5 && (bg2 & 0x80)) || mode == 6) bitmap |= 4;
++    return (flag & 15 & ~bitmap) != 0;
++}
++
++inline uint32_t cinematic_argb6(uint32_t color, unsigned brightness) {
++    const unsigned strength = std::min(brightness & 31, 16u);
++    const auto expand = [brightness, strength](uint32_t c) {
++        if ((brightness >> 14) == 1) c += ((63 - c) * strength) >> 4;
++        if ((brightness >> 14) == 2) c -= (c * strength) >> 4;
++        return (c << 2) | (c >> 4);
++    };
++    return 0xff000000u | (expand(color & 63) << 16) |
++        (expand((color >> 8) & 63) << 8) | expand((color >> 16) & 63);
++}
++
++// Apply placement only to the separately rendered 3D UI, preserving transparent pixels.
++// Source pixels use the DS renderer's 6-bit RGB / 5-bit alpha format. Nearest sampling keeps
++// the pixel-art treatment consistent with the current 1x renderer. Invalid placement is identity.
++template <typename LineReader>
++void composite_cinematic_ui(uint32_t* destination, LineReader read_line,
++                            CinematicUiPlacement placement, unsigned brightness) {
++    if (!valid_cinematic_ui_placement(placement)) placement = {};
++    for (int y = 0; y < placement.height; ++y) {
++        const auto* source = read_line((2 * y + 1) * 192 / (2 * placement.height));
++        for (int x = 0; x < placement.width; ++x) {
++            const auto color = source[(2 * x + 1) * 256 / (2 * placement.width)];
++            const unsigned alpha = (color >> 24) & 31;
++            if (!alpha) continue;
++            const auto pixel = cinematic_argb6(color, brightness);
++            auto& output = destination[(y + placement.y) * 256 + x + placement.x];
++            const unsigned weight = alpha + 1;
++            const auto blend = [weight](unsigned a, unsigned b) {
++                return (a * weight + b * (32 - weight)) >> 5;
++            };
++            output = 0xff000000u | (blend((pixel >> 16) & 255, (output >> 16) & 255) << 16) |
++                (blend((pixel >> 8) & 255, (output >> 8) & 255) << 8) | blend(pixel & 255, output & 255);
++        }
++    }
++}
++
++} // namespace ntr
+--- /dev/null
++++ b/runtime/include/ntr/cinematic.hpp
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++namespace ntr {
++
++// Destination for screen-space 3D UI in the optional 256x192 cinematic image.
++// Identity by default. Neither the world camera nor either original DS image is transformed.
++struct CinematicUiPlacement {
++    int x = 0, y = 0, width = 256, height = 192;
++};
++
++constexpr bool valid_cinematic_ui_placement(CinematicUiPlacement p) {
++    return p.x >= 0 && p.y >= 0 && p.width > 0 && p.height > 0 &&
++        p.x <= 256 && p.y <= 192 && p.width <= 256 - p.x && p.height <= 192 - p.y;
++}
++
++} // namespace ntr

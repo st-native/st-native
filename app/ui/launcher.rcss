@@ -54,7 +54,7 @@ h2 { font-size: 23dp; line-height: 28dp; }
 #game { flex: 1; min-width: 0; }
 #settings {
     box-sizing: border-box;
-    flex: 0 0 242dp;
+    flex: 0 0 264dp;
     margin-left: 28dp;
     border-left: 1dp #3a4642;
     padding-left: 24dp;
@@ -81,10 +81,15 @@ h2 { font-size: 23dp; line-height: 28dp; }
 #status.error { color: #ffbfaa; }
 
 .field { display: flex; align-items: center; justify-content: space-between; margin-top: 13dp; }
+.settings-tabs { display: flex; margin-top: 10dp; }
+.settings-tabs input[type=submit] { flex: 1; min-width: 0; height: 34dp; line-height: 32dp; margin-right: 5dp; }
+.settings-tabs input[type=submit].selected { border-color: #aabda6; background-color: #41584d; }
+.settings-page { display: none; min-height: 96dp; }
+.settings-page.selected { display: block; }
 label { margin-right: 9dp; color: #d4ded4; font-size: 16dp; }
 select {
     box-sizing: border-box;
-    flex: 0 0 108dp;
+    flex: 0 0 130dp;
     height: 36dp;
     padding: 0 8dp;
     background-color: #24312e;
