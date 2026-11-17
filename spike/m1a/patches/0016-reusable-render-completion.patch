@@ -1,0 +1,42 @@
+Make software-render completion reusable without restarting the frame.
+
+The cinematic camera previously used PreSavestate/PostSavestate as a fence,
+which reset scanline semaphores and scheduled a redundant original-frame render.
+Keep completion signaled until the next frame starts and wait on that fence.
+No change to guest timing, geometry, scanline readiness or output pixels.
+
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -687,9 +687,9 @@
+ const uint32_t* RuntimeImpl::render_cinematic(double aspect, CinematicUiPlacement ui) {
+     if (!gx_ || !options.cinematic_camera) return nullptr;
+     if (!cinematic_renderer_) cinematic_renderer_ = std::make_unique<CinematicRenderer>(*nds);
+-    nds->GetRenderer().PreSavestate();
++    // Completion is a reusable fence; do not reset scanline semaphores or redraw the original frame.
++    nds->GetRenderer().Finish3DRendering();
+     const bool rendered = gx_->render_cinematic(aspect, [&](bool overlay) { cinematic_renderer_->render(overlay, ui); });
+-    nds->GetRenderer().PostSavestate();
+     if (!rendered) return nullptr;
+     if (last_cinematic_frame_ + 1 == frames_) cinematic_renderer_->add_overlays(previous_overlay_pixels_);
+     last_cinematic_frame_ = frames_;
+--- a/third_party/CMakeLists.txt
++++ b/third_party/CMakeLists.txt
+@@ -397,3 +397,18 @@
+     endif()
+   endforeach()
+ endif()
++
++# A completed software frame can be observed more than once (the camera pass and then VBlank).
++# Keep its completion semaphore signaled until the next RenderFrame instead of scheduling a
++# second render just to rebuild synchronization state. The scanline semaphore is untouched.
++file(READ ${MS}/GPU3D_Soft.cpp soft_fence_src)
++string(REPLACE "\r\n" "\n" soft_fence_src "${soft_fence_src}")
++ffcc_patch(soft_fence_src GPU3D_Soft.cpp
++  "void SoftRenderer3D::FinishRendering()\n{\n    if (RenderThreadRunning.load(std::memory_order_relaxed) && !GPU3D.AbortFrame)\n        Platform::Semaphore_Wait(Sema_RenderDone);\n}"
++  "void SoftRenderer3D::FinishRendering()\n{\n    if (RenderThreadRunning.load(std::memory_order_relaxed) && !GPU3D.AbortFrame)\n    {\n        Platform::Semaphore_Wait(Sema_RenderDone);\n        Platform::Semaphore_Post(Sema_RenderDone);\n    }\n}")
++ffcc_patch(soft_fence_src GPU3D_Soft.cpp
++  "        // \"Render thread, you're up! Get moving.\"\n        Platform::Semaphore_Post(Sema_RenderStart);"
++  "        // Begin a new completion generation only after the previous frame was finished.\n        Platform::Semaphore_Reset(Sema_RenderDone);\n        // \"Render thread, you're up! Get moving.\"\n        Platform::Semaphore_Post(Sema_RenderStart);")
++ffcc_write_patched(soft_fence_src ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/GPU3D_Soft.cpp)
++set_source_files_properties(${MS}/GPU3D_Soft.cpp PROPERTIES HEADER_FILE_ONLY ON)
++target_sources(melonds_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/melonds_patched/GPU3D_Soft.cpp)

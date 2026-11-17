@@ -223,3 +223,10 @@ Compare the pictures in `build\boot1\` with the steps in the script's comments.
 | `missing tool: …` | step 2 or 3 was skipped, or LLVM is not at `C:\Program Files\LLVM` |
 | `the game module needs the hook …` | the module and the program come from different revisions: rebuild both |
 | `the runtime stopped: …` | a fatal error in the emulated console. Report the message, the frame, and the steps that led there (no screenshots or files from the game) |
+
+### Frame pacing diagnostics
+
+The current Windows alpha primes about 50 ms of source audio at startup and after pause/resume, and wakes the
+window when a new frame is ready. This handles short scheduling delays; sustained slow rendering can still starve
+audio. The extra single-screen camera remains a software pass. See [Frame pacing](design/FRAME_PACING.md) for measured
+limits, the numeric `--frame-profile`/`ST_NATIVE_FRAME_PROFILE` diagnostics and a reproducible comparison procedure.

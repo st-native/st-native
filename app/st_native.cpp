@@ -34,6 +34,7 @@
 //                            otherwise get consecutive instances, each with its own MAC address, which the game sees
 //                            (a scripted run then plays differently from frame 7); in a group of its own a run is
 //                            instance 0 with the default MAC, exactly as when it runs alone
+//     --frame-profile <csv>  numeric production/presentation/audio-queue diagnostics (no game data)
 //     --perf, --trace-threads, --trace-calls   the runtime's logs
 //   Script: one step per line, "#" starts a comment. Frames count from 1, the first frame shown.
 //     <frame> press <KEY>[+<KEY>...] [<frames held, default 6>]
@@ -102,7 +103,7 @@ constexpr KnownDump kKnown[] = {
 };
 
 struct Options {
-    fs::path rom, module, save, script, hashes, shots, counts, record, control;
+    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile;
     std::string wireless_group, player_name = "Link";
     std::vector<std::pair<uint64_t, std::string>> ram_dumps;
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
@@ -244,6 +245,8 @@ struct Shared {
     std::mutex m;
     std::vector<uint32_t> pixels = std::vector<uint32_t>(kW * kH * 3);
     bool fresh = false, shared_scene = false, cinematic = false;
+    uint64_t frame_number = 0, published_ns = 0;
+    uint32_t frame_event = 0;
     std::atomic<double> cinematic_aspect{0};
     std::atomic<uint32_t> held{0}, pressed{0};
     std::atomic<int> touch_x{0}, touch_y{0};
@@ -268,8 +271,18 @@ public:
     uint64_t interp_total() const { return interp_total_; }
     uint64_t cinematic_frames() const { return cinematic_frames_; }
     void set_audio(SDL_AudioStream* a) { audio_ = a; }
+    void pause_audio(bool paused) {
+        if (!audio_) return;
+        std::lock_guard lock(audio_mutex_);
+        audio_paused_ = paused;
+        audio_started_ = false;
+        SDL_PauseAudioStreamDevice(audio_);
+        SDL_ClearAudioStream(audio_);
+    }
+    void set_profile(std::ostream* stream) { profile_ = stream; }
 
     bool on_frame(const ntr::Frame& f) override {
+        const auto profile_start = profile_ ? SDL_GetTicksNS() : 0;
         ++frame_;
         name_keyboard.finish_frame();
         if (save_dirty_ && frame_ >= save_written_at_ + kSaveQuiet) flush_save();
@@ -281,16 +294,39 @@ public:
         if (!o_.control.empty() && !control(f)) return false;
         const bool shared_scene = track_scene_ && screen_context_.update(*rt_, f);
         const double aspect = o_.cinematic_aspect > 0 ? o_.cinematic_aspect : sh_.cinematic_aspect.load();
+        const auto camera_start = profile_ ? SDL_GetTicksNS() : 0;
         const auto* cinematic = shared_scene && aspect > 0 ? rt_->render_cinematic(aspect, screen_context_.ui_placement()) : nullptr;
+        const double camera_ms = profile_ ? double(SDL_GetTicksNS() - camera_start) / 1e6 : 0;
         cinematic_frames_ += cinematic != nullptr;
         if (!o_.headless && f.top && f.bottom) {
-            std::lock_guard<std::mutex> lock(sh_.m);
-            std::memcpy(sh_.pixels.data(), f.top, kW * kH * 4);
-            std::memcpy(sh_.pixels.data() + kW * kH, f.bottom, kW * kH * 4);
-            sh_.shared_scene = shared_scene;
-            sh_.cinematic = cinematic != nullptr;
-            if (cinematic) std::memcpy(sh_.pixels.data() + 2 * kW * kH, cinematic, kW * kH * 4);
-            sh_.fresh = true;
+            bool wake = false;
+            {
+                std::lock_guard<std::mutex> lock(sh_.m);
+                wake = !sh_.fresh;
+                std::memcpy(sh_.pixels.data(), f.top, kW * kH * 4);
+                std::memcpy(sh_.pixels.data() + kW * kH, f.bottom, kW * kH * 4);
+                sh_.shared_scene = shared_scene;
+                sh_.cinematic = cinematic != nullptr;
+                if (cinematic) std::memcpy(sh_.pixels.data() + 2 * kW * kH, cinematic, kW * kH * 4);
+                sh_.frame_number = frame_;
+                sh_.published_ns = SDL_GetTicksNS();
+                sh_.fresh = true;
+            }
+            // Coalesce readiness notifications while a newer frame is already pending. Wake
+            // the window promptly instead of adding up to 4 ms of polling jitter to each frame.
+            if (wake && sh_.frame_event) {
+                SDL_Event event{};
+                event.type = sh_.frame_event;
+                SDL_PushEvent(&event);
+            }
+        }
+        if (profile_) {
+            const int queued = audio_ ? SDL_GetAudioStreamQueued(audio_) : 0;
+            *profile_ << frame_ << ',' << profile_start << ','
+                << (profile_previous_ ? double(profile_start - profile_previous_) / 1e6 : 0) << ','
+                << f.emu_ms << ',' << camera_ms << ',' << double(SDL_GetTicksNS() - profile_start) / 1e6 << ','
+                << double(queued) / 192.0 << ',' << audio_empty_feeds_ << ',' << audio_dropped_samples_ << '\n';
+            profile_previous_ = profile_start;
         }
         // The script's steps for this frame; input set now is what the game reads in the next frame.
         uint32_t held = 0, pressed = 0;
@@ -358,8 +394,20 @@ public:
 
     void on_audio(const int16_t* samples, size_t frames) override {
         if (!audio_) return;
-        if (SDL_GetAudioStreamQueued(audio_) > 48000 * 4 / 10) return;  // keep latency bounded (~100 ms)
+        std::lock_guard lock(audio_mutex_);
+        if (audio_paused_) return;
+        const int queued = SDL_GetAudioStreamQueued(audio_);
+        if (profile_ && audio_started_ && frame_ >= 180 && queued == 0) ++audio_empty_feeds_;
+        if (queued > 48000 * 4 / 10) { // keep latency bounded (~100 ms)
+            audio_dropped_samples_ += frames;
+            return;
+        }
         SDL_PutAudioStreamData(audio_, samples, int(frames * 4));
+        // Prime 50 ms before playback (also after resuming). Short scheduling hitches can then
+        // consume queued samples instead of immediately starving the device. Sustained slow
+        // execution still needs a rendering fix; increasing the buffer cannot repair it.
+        if (!audio_started_ && SDL_GetAudioStreamQueued(audio_) >= 48000 * 4 / 20)
+            audio_started_ = SDL_ResumeAudioStreamDevice(audio_);
     }
 
     // The runtime reports every backup write the game makes, and one in-game save is many small writes. Writing the
@@ -476,6 +524,10 @@ private:
     st::ScreenContext screen_context_;
     ntr::Runtime* rt_ = nullptr;
     SDL_AudioStream* audio_ = nullptr;
+    std::mutex audio_mutex_;
+    bool audio_started_ = false, audio_paused_ = false;
+    std::ostream* profile_ = nullptr;
+    uint64_t profile_previous_ = 0, audio_empty_feeds_ = 0, audio_dropped_samples_ = 0;
     uint64_t frame_ = 0, interp_total_ = 0, deadline_ = 0;
     uint64_t cinematic_frames_ = 0;
     static constexpr uint64_t kSaveQuiet = 30;  // half a second without backup writes
@@ -551,6 +603,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--gx-check") o.gx_check = true;
         else if (a == "--exit-after") o.exit_after = std::strtoull(next().c_str(), nullptr, 10);
         else if (a == "--hashes") o.hashes = next_path();
+        else if (a == "--frame-profile") o.frame_profile = next_path();
         else if (a == "--shots") o.shots = next_path();
         else if (a == "--counts") o.counts = next_path();
         else if (a == "--record") o.record = next_path();
@@ -658,6 +711,17 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     if (!o.hashes.empty() && !(hashes = std::fopen(o.hashes.string().c_str(), "w")))
         return std::fprintf(stderr, "cannot write %s\n", o.hashes.string().c_str()), 2;
 
+    if (o.frame_profile.empty())
+        if (const char* path = std::getenv("ST_NATIVE_FRAME_PROFILE")) o.frame_profile = path_from_utf8(path);
+    std::ofstream frame_profile, present_profile;
+    if (!o.frame_profile.empty()) {
+        frame_profile.open(o.frame_profile);
+        present_profile.open(fs::path(o.frame_profile).concat(".present.csv"));
+        if (!frame_profile || !present_profile)
+            return std::fprintf(stderr, "cannot open frame profile output\n"), 2;
+        frame_profile << "frame,timestamp_ns,interval_ms,guest_ms,camera_ms,host_ms,audio_queued_ms,audio_empty_feeds,audio_dropped_samples\n";
+        present_profile << "frame,interval_ms,present_ms,age_ms\n";
+    }
     const SDL_InitFlags systems = o.headless ? 0 : SDL_INIT_AUDIO | SDL_INIT_GAMEPAD | (presentation ? 0 : SDL_INIT_VIDEO);
     if (!SDL_InitSubSystem(systems))
         return std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError()), 1;
@@ -703,7 +767,12 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0;
 
     Shared sh;
+    if (!o.headless) {
+        const auto event = SDL_RegisterEvents(1);
+        if (event != Uint32(-1)) sh.frame_event = event;
+    }
     StHost host(o, sh, std::move(script), hashes, ro.cinematic_camera);
+    if (frame_profile.is_open()) host.set_profile(&frame_profile);
 
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> owned_window(nullptr, SDL_DestroyWindow);
     std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)> renderer(nullptr, SDL_DestroyRenderer);
@@ -727,8 +796,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             std::fprintf(stderr, "cannot start in fullscreen: %s\n", SDL_GetError());
         const SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 48000};
         audio.reset(SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr));
-        if (audio) SDL_ResumeAudioStreamDevice(audio.get());
-        else std::fprintf(stderr, "no sound: %s\n", SDL_GetError());
+        if (!audio) std::fprintf(stderr, "no sound: %s\n", SDL_GetError());
         host.set_audio(audio.get());
     }
 
@@ -755,7 +823,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         uint32_t kb = 0, pad = 0, stick = 0;
         bool mouse_down = false;
         bool menu_open = false;
-        uint64_t presented_frames = 0;
+        uint64_t presented_frames = 0, previous_present_ns = 0;
         std::vector<uint32_t> frame(kW * kH * 3);
 
         auto change_menu = [&](bool open) {
@@ -765,18 +833,12 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             sh.touching = sh.fast = false;
             host.name_keyboard.discard_pending();
             if (open && SDL_TextInputActive(window)) SDL_StopTextInput(window);
+            host.pause_audio(open);
             {
                 std::lock_guard lock(sh.pause_mutex);
                 sh.paused = open;
             }
             sh.pause_cv.notify_one();
-            if (audio) {
-                if (open) SDL_PauseAudioStreamDevice(audio.get());
-                else {
-                    SDL_ClearAudioStream(audio.get());
-                    SDL_ResumeAudioStreamDevice(audio.get());
-                }
-            }
             menu_open = open;
             if (open) menu->open();
             else menu->close();
@@ -909,6 +971,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 continue;
             }
             bool draw, shared_scene = false, cinematic = false;
+            uint64_t frame_number = 0, published_ns = 0;
             {
                 std::lock_guard<std::mutex> lock(sh.m);
                 draw = sh.fresh;
@@ -916,10 +979,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     frame.swap(sh.pixels);
                     shared_scene = sh.shared_scene;
                     cinematic = sh.cinematic;
+                    frame_number = sh.frame_number;
+                    published_ns = sh.published_ns;
                     sh.fresh = false;
                 }
             }
             if (!draw) continue;
+            const auto present_start = present_profile.is_open() ? SDL_GetTicksNS() : 0;
             if (presentation) {
                 saw_shared_scene |= shared_scene;
                 saw_cinematic |= cinematic;
@@ -931,6 +997,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                                    SDL_RenderTexture(renderer.get(), texture.get(), nullptr, nullptr) &&
                                    SDL_RenderPresent(renderer.get());
                 if (!drawn) view_error = sh.quit = true;
+            }
+            if (present_profile.is_open()) {
+                const auto end = SDL_GetTicksNS();
+                present_profile << frame_number << ','
+                    << (previous_present_ns ? double(end - previous_present_ns) / 1e6 : 0) << ','
+                    << double(end - present_start) / 1e6 << ',' << double(end - published_ns) / 1e6 << '\n';
+                previous_present_ns = end;
             }
             if (test_menu_after && !view_error) {
                 ++presented_frames;

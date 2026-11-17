@@ -7,6 +7,7 @@
 #include <RmlUi/Core/StringUtilities.h>
 
 #include <array>
+#include <cstdlib>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -607,10 +608,16 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         if (!handle) return 8;
         for (const auto& option : kLayoutOptions) {
             const auto layout = option.first;
+            if (const char* selected = std::getenv("ST_NATIVE_SMOKE_LAYOUT"))
+                if (std::string_view(selected) != option.second) continue;
+            uint64_t smoke_frames = 300;
+            if (const char* count = std::getenv("ST_NATIVE_SMOKE_FRAMES"))
+                smoke_frames = std::clamp<uint64_t>(std::strtoull(count, nullptr, 10), 180, 36000);
+            if (std::getenv("ST_NATIVE_SMOKE_ORIGINAL")) game->automatic_join = false;
             game->layout = layout;
             game->fullscreen = layout == st::ScreenLayout::classic || layout == st::ScreenLayout::picture_in_picture;
             document->Hide();
-            const auto result = st::play_game_in_window(*game, window, pause, 300);
+            const auto result = st::play_game_in_window(*game, window, pause, smoke_frames);
             document->Show();
             if (result.exit_code || result.close_requested ||
                 handle != SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) ||

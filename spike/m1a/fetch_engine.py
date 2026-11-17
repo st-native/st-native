@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import tempfile
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +27,48 @@ def git(*args: str, cwd: Path | None = None) -> str:
     if r.returncode:
         raise SystemExit(f"git {' '.join(args)} failed:\n{r.stderr.strip()}")
     return r.stdout.strip()
+
+
+def apply_patch_stack(dest: Path, patches: list[Path]) -> None:
+    """Match the complete applied prefix, including patches that edit earlier patches' hunks.
+
+    The temporary index validates expected trees without staging or overwriting local files.
+    A patch-by-patch reverse check cannot recognize an older patch after a later one edits it.
+    """
+    with tempfile.TemporaryDirectory(prefix="st-native-patches-") as directory:
+        env = dict(os.environ, GIT_INDEX_FILE=str(Path(directory) / "index"))
+        def index_git(*args: str) -> subprocess.CompletedProcess[str]:
+            result = subprocess.run(["git", *args], cwd=dest, env=env, capture_output=True, text=True)
+            if result.returncode:
+                raise SystemExit(f"patch stack check failed: {result.stderr.strip()}")
+            return result
+        def matches() -> bool:
+            result = subprocess.run(["git", "diff", "--quiet", "--ignore-submodules=dirty"],
+                                    cwd=dest, env=env, capture_output=True)
+            if result.returncode not in (0, 1):
+                raise SystemExit("cannot compare the engine with the expected patch stack")
+            return result.returncode == 0
+        index_git("read-tree", "HEAD")
+        for patch in patches:
+            index_git("apply", "--cached", str(patch.resolve()))
+        final_files = set(index_git("ls-files").stdout.splitlines())
+        prefix = len(patches)
+        while not matches():
+            if prefix == 0:
+                raise SystemExit("engine edits do not match a known patch prefix; preserve them and create a patch first")
+            prefix -= 1
+            index_git("apply", "--cached", "--reverse", str(patches[prefix].resolve()))
+        prefix_files = set(index_git("ls-files").stdout.splitlines())
+        for name in final_files - prefix_files:
+            target = dest / name
+            if target.exists() or target.is_symlink():
+                raise SystemExit(f"untracked file blocks the pending patch stack: {name}")
+        for i, patch in enumerate(patches):
+            if i < prefix:
+                print(f"{patch.name}: already applied")
+            else:
+                git("apply", str(patch.resolve()), cwd=dest)
+                print(f"{patch.name}: applied")
 
 
 def main() -> int:
@@ -48,13 +92,7 @@ def main() -> int:
             if got != sub["commit"]:
                 raise SystemExit(f"{path} at {got}, lock says {sub['commit']}")
             print(f"{path} {got}")
-    for patch in sorted((HERE / "patches").glob("*.patch")):
-        if subprocess.run(["git", "apply", "--reverse", "--check", str(patch)], cwd=a.dest,
-                          capture_output=True).returncode == 0:
-            print(f"{patch.name}: already applied")
-            continue
-        git("apply", str(patch), cwd=a.dest)
-        print(f"{patch.name}: applied")
+    apply_patch_stack(a.dest, sorted((HERE / "patches").glob("*.patch")))
     return 0
 
 
