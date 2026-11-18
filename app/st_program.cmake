@@ -5,9 +5,10 @@
 include(${ST_ROOT}/spike/m1a/host/m1a_targets.cmake)
 
 # The game host is shared by the CLI and the desktop launcher.
-add_library(st_game_host STATIC ${ST_ROOT}/app/st_native.cpp ${ST_ROOT}/game/st/hooks/st_hooks.cpp
+add_library(st_game_host STATIC ${ST_ROOT}/app/st_native.cpp ${ST_ROOT}/app/audio/audio_devices.cpp
+            ${ST_ROOT}/app/audio/mic_source.cpp ${ST_ROOT}/game/st/hooks/st_hooks.cpp
             ${ST_ROOT}/game/st/hooks/st_probe.cpp ${ST_ROOT}/game/st/hooks/name_keyboard.cpp)
-target_include_directories(st_game_host PRIVATE ${ST_ROOT}/game/st/hooks)
+target_include_directories(st_game_host PRIVATE ${ST_ROOT}/app ${ST_ROOT}/game/st/hooks)
 target_link_libraries(st_game_host PUBLIC ntr_runtime ntr_common SDL3::SDL3-static)
 add_executable(st_native ${ST_ROOT}/app/st_native_main.cpp)
 target_link_libraries(st_native PRIVATE st_game_host)
@@ -36,6 +37,11 @@ if(FFCC_BUILD_TESTS)
   add_test(NAME st_subtitle_composition COMMAND st_subtitle_composition_tests)
   add_executable(st_launcher_preferences_tests "${ST_ROOT}/tests/test_launcher_preferences.cpp")
   add_test(NAME st_launcher_preferences COMMAND st_launcher_preferences_tests)
+  add_executable(st_audio_tests "${ST_ROOT}/tests/test_audio.cpp" "${ST_ROOT}/app/audio/mic_source.cpp"
+                 "${ST_ROOT}/app/audio/audio_devices.cpp")
+  target_include_directories(st_audio_tests PRIVATE "${ST_ROOT}/app")
+  target_link_libraries(st_audio_tests PRIVATE SDL3::SDL3-static)
+  add_test(NAME st_audio COMMAND st_audio_tests)
 endif()
 
 # Source-checkout launcher for the Windows developer alpha. Reuse the engine's pinned RmlUi/GL3 backend.

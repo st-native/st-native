@@ -26,6 +26,7 @@
           <div class="settings-tabs">
             <input type="submit" id="tab-screens" class="selected" value="Screens" />
             <input type="submit" id="tab-features" value="Screen features" />
+            <input type="submit" id="tab-audio" value="Audio" />
             <input type="submit" id="tab-window" value="Window" />
             <input type="submit" id="tab-game" value="Game" />
           </div>
@@ -78,15 +79,77 @@
               <select id="hide-secondary"><option value="on">On</option><option value="off">Off</option></select>
             </div>
           </div>
-          <div id="settings-game" class="settings-page">
-          <div class="field">
-            <label for="language">Game language</label>
-            <select id="language">
-              <option value="en">English</option>
-              <option value="fr">Français</option>
-              <option value="es">Español</option>
-            </select>
+          <div id="settings-audio" class="settings-page">
+            <div class="field">
+              <label for="master-volume">Master volume</label>
+              <div class="range-group">
+                <input type="range" id="master-volume" class="slider" min="0" max="100" step="1" value="100" />
+                <span id="master-volume-value" class="range-value">100%</span>
+              </div>
+            </div>
+            <div class="field">
+              <label for="mute-unfocused">Mute unfocused</label>
+              <select id="mute-unfocused">
+                <option value="off">Off</option>
+                <option value="on">On</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="audio-interp">Audio quality</label>
+              <select id="audio-interp">
+                <option value="none">Original DS</option>
+                <option value="linear">Linear</option>
+                <option value="cosine">Cosine</option>
+                <option value="cubic">Cubic</option>
+                <option value="gaussian">Gaussian</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="output-device">Output device</label>
+              <select id="output-device">
+                <option value="">System default</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="mic-mode">Microphone</label>
+              <select id="mic-mode">
+                <option value="automatic">Automatic</option>
+                <option value="real">Real mic</option>
+                <option value="virtual">Virtual blow</option>
+                <option value="hybrid">Hybrid</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="input-device">Input device</label>
+              <select id="input-device">
+                <option value="">System default</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="mic-gain">Mic / blow level</label>
+              <div class="range-group">
+                <input type="range" id="mic-gain" class="slider" min="0" max="200" step="5" value="100" />
+                <span id="mic-gain-value" class="range-value">100%</span>
+              </div>
+            </div>
           </div>
+          <div id="settings-game" class="settings-page">
+            <div class="field">
+              <label for="language">Game language</label>
+              <select id="language">
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+                <option value="es">Español</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pause-on-menu">Pause on Esc / F1</label>
+              <select id="pause-on-menu">
+                <option value="off">Off</option>
+                <option value="on">On</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>

@@ -23,6 +23,7 @@ checks. Report: [docs/research/M1A_SPIKE.md](../../docs/research/M1A_SPIKE.md). 
 | `patches/0017-graphics-context-inspection.patch` | read-only graphics-context diagnostics: projection summaries and display registers, cached on demand. No game-specific scene policy or protected-code inspection; used by the local [dual-screen survey](../../docs/design/DUAL_SCREEN_VALIDATION.md) |
 | `patches/0018-cinematic-frustum-span.patch` | generic explicit vertical frustum union and centered-perspective world policy; preserves legacy symmetric-camera defaults. Game profiles remain outside the engine |
 | `patches/0019-frame-foreground-planes.patch` | optional read-only software foreground planes for host composition; display-register queries can skip projection parsing. No extra render pass or game-specific policy |
+| `patches/0020-runtime-audio-and-mic.patch` | game-agnostic microphone callbacks through Host and optional SPU interpolation, applied at frame boundaries; device handling and virtual breath stay in the app |
 | `fixtures/zpoc_synthetic.rom`, `fixtures/zpoc_hashes_windows_x64.txt` | the synthetic cartridge as built on Windows (our own code; SHA-1 `faacbe28…`) and its 600 per-frame state hashes there, the cross-platform reference |
 | `run_posix.sh`, `run_linux.sh`, `run_android.sh` | Linux/macOS: everything (fetch, V1, V2, V3, cartridge vs the Windows reference); Android: NDK compile + link |
 | `ci/m1a.yml`, `ci/make_ci_repo.py` | the CI workflow and the script that assembles the private CI repository (only this folder) |

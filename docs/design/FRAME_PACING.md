@@ -69,3 +69,14 @@ Raw diagnostic files belong under ignored `build/`. Remove the environment varia
 Run hash/image correctness checks separately with `tests/rom/title_single_screen.txt`, `--hashes`, local `--shots`
 and `--gx-check`. Per-frame memory hashing and image writes add overhead and should not be enabled in timing runs.
 Never publish the resulting images, modules, saves or hash logs.
+
+## Audio controls publication check (2026-11-18)
+
+**Verified locally:** Windows build and all 17 C++/UI tests pass, including microphone-source lifecycle/arbitration,
+synthetic breath, gain/clipping, device enumeration and preference migration. The native launcher smoke test covers
+the audio settings and pause/menu integration. Python reports 12 tests, one skipped, no failures.
+
+A 6,200-frame headless replay with original SPU interpolation and microphone Off matches all reference guest-state,
+RAM and interpreter-count entries. This checks compatibility with enhancements disabled; it does not verify every
+microphone mechanic or perceptual audio quality. Full flute duets, all blowing puzzles, device reconnection during
+those mechanics and other target platforms were not revalidated in this publication check. No audio was recorded.

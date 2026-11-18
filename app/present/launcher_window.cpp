@@ -8,6 +8,8 @@
 #include <frontend/glad/glad.h>
 
 #include <algorithm>
+#include <atomic>
+#include <mutex>
 
 namespace {
 
@@ -44,6 +46,10 @@ struct LauncherWindow::State {
     st::ScreenLayout layout = st::ScreenLayout::focus;
     bool automatic_join = true, shared_scene = false, classic_override = false, cinematic = false;
     st::ScreenEnhancements enhancements;
+    mutable std::mutex audio_mutex;
+    std::atomic<uint64_t> audio_revision{1};
+    st::AudioSettings audio;
+    std::atomic<bool> pause_on_menu{false};
 
     bool show_cinematic() const { return cinematic && shared_scene && (automatic_join != classic_override); }
 
@@ -102,6 +108,7 @@ LauncherWindow::~LauncherWindow() {
 
 bool LauncherWindow::open(const char* title, int width, int height) {
     if (!SDL_Init(SDL_INIT_VIDEO)) return false;
+    SDL_InitSubSystem(SDL_INIT_AUDIO);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -126,7 +133,8 @@ bool LauncherWindow::open(const char* title, int width, int height) {
 
 SDL_Window* LauncherWindow::window() const { return state_->window.get(); }
 
-bool LauncherWindow::process_events(Rml::Context& context) {
+bool LauncherWindow::process_events(Rml::Context& context, bool* audio_devices_changed) {
+    if (audio_devices_changed) *audio_devices_changed = false;
     SDL_Event event;
     auto next_event = [&](bool wait) {
         state_->pumping_context = &context;
@@ -139,6 +147,9 @@ bool LauncherWindow::process_events(Rml::Context& context) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) open = false;
         else {
             if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) update_minimum_size(window());
+            if (audio_devices_changed &&
+                (event.type == SDL_EVENT_AUDIO_DEVICE_ADDED || event.type == SDL_EVENT_AUDIO_DEVICE_REMOVED))
+                *audio_devices_changed = true;
             RmlSDL::InputEventHandler(&context, window(), event);
         }
     }
@@ -163,8 +174,8 @@ bool LauncherWindow::draw(Rml::Context& context, const char* preview_path) {
     return SDL_GL_SwapWindow(window()) && saved;
 }
 
-bool LauncherWindow::present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) {
-    state_->system->set_game_mode(true);
+bool LauncherWindow::update_game_frame(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) {
+    if (SDL_GL_GetCurrentContext() != state_->gl && !SDL_GL_MakeCurrent(window(), state_->gl)) return false;
     if (!touch_captured && state_->shared_scene != shared_scene) {
         state_->shared_scene = shared_scene;
         if (state_->automatic_join) state_->classic_override = false;
@@ -173,7 +184,13 @@ bool LauncherWindow::present_game(const uint32_t* pixels, bool shared_scene, boo
     if (!state_->game_framebuffer && !state_->create_game_target()) return false;
     glBindTexture(GL_TEXTURE_2D, state_->game_texture);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kDsWidth, kTextureHeight, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
-    return draw_game() && SDL_GL_SwapWindow(window());
+    return true;
+}
+
+bool LauncherWindow::present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) {
+    state_->system->set_game_mode(true);
+    return update_game_frame(pixels, shared_scene, touch_captured, cinematic) && draw_game() &&
+           SDL_GL_SwapWindow(window());
 }
 
 bool LauncherWindow::draw_game() {
@@ -264,3 +281,23 @@ double LauncherWindow::cinematic_aspect() const {
 }
 
 uint32_t LauncherWindow::screen_features() const { return state_->enhancements.mask(); }
+
+uint64_t LauncherWindow::audio_revision() const { return state_->audio_revision.load(); }
+
+st::AudioSettings LauncherWindow::audio_settings() const {
+    std::lock_guard lock(state_->audio_mutex);
+    return state_->audio;
+}
+
+void LauncherWindow::set_audio_settings(const st::AudioSettings& audio) {
+    {
+        std::lock_guard lock(state_->audio_mutex);
+        if (state_->audio == audio) return;
+        state_->audio = audio;
+    }
+    state_->audio_revision.fetch_add(1);
+}
+
+bool LauncherWindow::pause_on_menu() const { return state_->pause_on_menu.load(); }
+
+void LauncherWindow::set_pause_on_menu(bool pause) { state_->pause_on_menu.store(pause); }

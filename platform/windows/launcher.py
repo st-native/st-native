@@ -279,9 +279,17 @@ def run(args: argparse.Namespace) -> None:
             return
         status("Starting the game...")
         command = [native, args.rom, "--module", module, "--scale", str(args.scale), "--language", args.language,
-                   "--player-name", args.player_name]
+                   "--player-name", args.player_name, "--volume", str(args.volume),
+                   "--audio-interp", args.audio_interp, "--mic-mode", args.mic_mode,
+                   "--mic-gain", str(args.mic_gain)]
         if args.fullscreen:
             command.append("--fullscreen")
+        if args.mute_unfocused:
+            command.append("--mute-unfocused")
+        if args.output_device:
+            command.extend(["--output-device", args.output_device])
+        if args.input_device:
+            command.extend(["--input-device", args.input_device])
         with (logs / "game.log").open("wb") as log:
             with subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
                                   creationflags=subprocess.CREATE_NO_WINDOW) as game:
@@ -308,6 +316,13 @@ def main() -> int:
     parser.add_argument("--language", choices=("en", "fr", "es"), default="en")
     parser.add_argument("--fullscreen", action="store_true")
     parser.add_argument("--player-name", default="Link")
+    parser.add_argument("--volume", type=int, default=100)
+    parser.add_argument("--mute-unfocused", action="store_true")
+    parser.add_argument("--audio-interp", choices=("none", "linear", "cosine", "cubic", "gaussian"), default="none")
+    parser.add_argument("--output-device", default="")
+    parser.add_argument("--mic-mode", choices=("automatic", "real", "virtual", "hybrid", "off"), default="automatic")
+    parser.add_argument("--input-device", default="")
+    parser.add_argument("--mic-gain", type=int, default=100)
     args = parser.parse_args()
     if args.rom is None and not (args.cache_info or args.remove_cache):
         parser.error("--rom is required for ROM verification and compilation")

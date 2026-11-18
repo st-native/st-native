@@ -23,12 +23,12 @@ h1, h2, p { margin: 0; font-weight: normal; }
     overflow-y: auto;
 }
 
-#layout { margin: 0 auto; max-width: 920dp; padding: 30dp 34dp 34dp; }
+#layout { margin: 0 auto; max-width: 920dp; padding: 26dp 32dp 28dp; }
 #header {
     display: flex;
     align-items: center;
-    padding-bottom: 20dp;
-    margin-bottom: 27dp;
+    padding-bottom: 18dp;
+    margin-bottom: 24dp;
     border-bottom: 1dp #3a4642;
 }
 
@@ -54,10 +54,10 @@ h2 { font-size: 23dp; line-height: 28dp; }
 #game { flex: 1; min-width: 0; }
 #settings {
     box-sizing: border-box;
-    flex: 0 0 264dp;
-    margin-left: 28dp;
+    flex: 0 0 338dp;
+    margin-left: 26dp;
     border-left: 1dp #3a4642;
-    padding-left: 24dp;
+    padding-left: 22dp;
 }
 
 #source { display: flex; align-items: center; margin-top: 15dp; }
@@ -82,7 +82,7 @@ h2 { font-size: 23dp; line-height: 28dp; }
 
 .field { display: flex; align-items: center; justify-content: space-between; margin-top: 13dp; }
 .settings-tabs { display: flex; flex-wrap: wrap; margin-top: 10dp; }
-.settings-tabs input[type=submit] { flex: 1 1 40%; min-width: 0; height: 34dp; line-height: 32dp; margin-right: 5dp; margin-bottom: 5dp; }
+.settings-tabs input[type=submit] { flex: 1 0 auto; min-width: 0; height: 34dp; line-height: 32dp; padding: 0 9dp; margin-right: 5dp; margin-bottom: 5dp; }
 #settings-features select { flex-basis: 72dp; }
 .settings-tabs input[type=submit].selected { border-color: #aabda6; background-color: #41584d; }
 .settings-page { display: none; min-height: 96dp; }
@@ -99,7 +99,12 @@ select {
     cursor: pointer;
 }
 
-select selectvalue { line-height: 33dp; }
+select selectvalue {
+    line-height: 33dp;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
 select selectarrow {
     width: 0;
     height: 0;
@@ -109,9 +114,76 @@ select selectarrow {
     border-left: 4dp transparent;
 }
 
-select selectbox { background-color: #24312e; border: 1dp #64796b; }
-select option { padding: 4dp 8dp; }
+select selectbox { background-color: #24312e; border: 1dp #64796b; max-height: 220dp; overflow-y: auto; }
+select option { padding: 4dp 8dp; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 select option:hover, select option:checked { background-color: #42584d; }
+
+#settings-audio .field { margin-top: 4dp; }
+#settings-audio label { font-size: 15dp; line-height: 22dp; }
+#settings-audio select { flex: 0 0 190dp; height: 27dp; font-size: 15dp; }
+#settings-audio select selectvalue { line-height: 25dp; }
+#settings-audio select selectarrow { margin: 10dp 1dp 0 6dp; }
+#settings-audio select option { font-size: 15dp; }
+
+.range-group {
+    display: flex;
+    align-items: center;
+    flex: 0 0 190dp;
+    height: 26dp;
+}
+
+input.slider {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 24dp;
+    cursor: pointer;
+}
+
+input.slider sliderarrowdec,
+input.slider sliderarrowinc {
+    width: 0;
+    height: 0;
+}
+
+input.slider slidertrack {
+    height: 6dp;
+    margin: 9dp 0;
+    border-radius: 3dp;
+    background-color: #263532;
+    border: 1dp #485b52;
+}
+
+input.slider sliderbar {
+    width: 12dp;
+    height: 16dp;
+    margin: 4dp 0;
+    border-radius: 4dp;
+    background-color: #c7dbb9;
+    border: 1dp #eff2eb;
+}
+
+input.slider:hover sliderbar,
+input.slider:focus sliderbar {
+    background-color: #eed08c;
+    border-color: #eed08c;
+}
+
+input.slider:disabled { cursor: unavailable; }
+input.slider:disabled slidertrack { background-color: #1c2523; border-color: #36433d; }
+input.slider:disabled sliderbar { background-color: #5e6f66; border-color: #77887f; }
+
+.range-value {
+    display: block;
+    flex: 0 0 42dp;
+    margin-left: 6dp;
+    text-align: right;
+    font-size: 15dp;
+    line-height: 24dp;
+    color: #eff2eb;
+}
+
+.range-value.disabled { color: #9eafa6; }
 
 input[type=submit] {
     display: block;
@@ -138,7 +210,7 @@ input[type=submit]:disabled, #play:disabled, select:disabled {
     cursor: unavailable;
 }
 
-#build-panel { border-top: 1dp #3a4642; margin-top: 24dp; padding-top: 16dp; }
+#build-panel { border-top: 1dp #3a4642; margin-top: 20dp; padding-top: 15dp; }
 #build-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; }
 #cache-summary { color: #b3c0b8; font-size: 16dp; margin-left: 8dp; }
 #build-actions { display: flex; flex-wrap: wrap; margin-top: 9dp; }
@@ -168,5 +240,6 @@ scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc { height: 0; 
     #settings { margin: 23dp 0 0; padding: 17dp 0 0; border-left: 0; border-top: 1dp #3a4642; }
     .field { max-width: 340dp; }
     select { flex-basis: 130dp; }
+    #settings-audio select, .range-group { flex-basis: 190dp; }
     #build-panel { margin-top: 23dp; }
 }

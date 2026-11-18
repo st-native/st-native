@@ -2,15 +2,20 @@
 <head>
   <link type="text/rcss" href="launcher.rcss" />
   <style>
-    body { background-color: #101717c9; display: flex; align-items: center; justify-content: center; }
-    #pause-panel { box-sizing: border-box; width: 440dp; max-width: 94%; max-height: 94%; overflow-y: auto;
+    body { background-color: #10171788; display: flex; align-items: center; justify-content: center; }
+    body.paused { background-color: #101717c9; }
+    #pause-panel { box-sizing: border-box; width: 452dp; max-width: 94%; max-height: 94%; overflow-y: auto;
                    padding: 16dp 20dp; background-color: #171e1e;
                    border: 1dp #52645a; border-radius: 6dp; }
     #pause-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14dp; }
-    #classic-shortcut { color: #b3c0b8; font-size: 15dp; }
+    #pause-heading-actions { display: flex; align-items: center; }
+    #classic-shortcut { color: #b3c0b8; font-size: 15dp; margin-right: 12dp; }
+    #pause-mode { width: auto; height: 32dp; line-height: 30dp; padding: 0 11dp; font-size: 15dp; }
+    #pause-mode.active { border-color: #aabda6; background-color: #41584d; }
     #pause-panel > input { width: 100%; }
-    #pause-panel .settings-page { min-height: 92dp; }
-    #pause-panel .settings-tabs input { flex: 1; margin-bottom: 0; }
+    #pause-panel .settings-page { min-height: 92dp; margin-bottom: 12dp; }
+    #pause-panel .settings-tabs input { flex: 1 0 auto; margin-bottom: 5dp; }
+    #pause-panel #settings-audio select, #pause-panel .range-group { flex-basis: 220dp; }
     #display-row, #layout-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10dp; }
     #display-row input { width: 112dp; }
     #resume { background-color: #c7dbb9; border-color: #c7dbb9; color: #18231d; margin-bottom: 8dp; }
@@ -21,12 +26,16 @@
 <body>
   <div id="pause-panel">
     <div id="pause-heading">
-      <h2>Paused</h2>
-      <p id="classic-shortcut">F2 · Original view</p>
+      <h2 id="pause-title">Menu</h2>
+      <div id="pause-heading-actions">
+        <p id="classic-shortcut">F2 · Original view</p>
+        <input type="submit" id="pause-mode" value="Pause game: Off" />
+      </div>
     </div>
     <div class="settings-tabs">
       <input type="submit" id="tab-screens" class="selected" value="Screens" />
       <input type="submit" id="tab-features" value="Screen features" />
+      <input type="submit" id="tab-audio" value="Audio" />
       <input type="submit" id="tab-window" value="Window" />
     </div>
     <div id="settings-screens" class="settings-page selected">
@@ -61,13 +70,68 @@
         <select id="hide-secondary"><option value="on">On</option><option value="off">Off</option></select>
       </div>
     </div>
+    <div id="settings-audio" class="settings-page">
+      <div class="field">
+        <label for="master-volume">Master volume</label>
+        <div class="range-group">
+          <input type="range" id="master-volume" class="slider" min="0" max="100" step="1" value="100" />
+          <span id="master-volume-value" class="range-value">100%</span>
+        </div>
+      </div>
+      <div class="field">
+        <label for="mute-unfocused">Mute unfocused</label>
+        <select id="mute-unfocused">
+          <option value="off">Off</option>
+          <option value="on">On</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="audio-interp">Audio quality</label>
+        <select id="audio-interp">
+          <option value="none">Original DS</option>
+          <option value="linear">Linear</option>
+          <option value="cosine">Cosine</option>
+          <option value="cubic">Cubic</option>
+          <option value="gaussian">Gaussian</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="output-device">Output device</label>
+        <select id="output-device">
+          <option value="">System default</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="mic-mode">Microphone</label>
+        <select id="mic-mode">
+          <option value="automatic">Automatic</option>
+          <option value="real">Real mic</option>
+          <option value="virtual">Virtual blow</option>
+          <option value="hybrid">Hybrid</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="input-device">Input device</label>
+        <select id="input-device">
+          <option value="">System default</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="mic-gain">Mic / blow level</label>
+        <div class="range-group">
+          <input type="range" id="mic-gain" class="slider" min="0" max="200" step="5" value="100" />
+          <span id="mic-gain-value" class="range-value">100%</span>
+        </div>
+      </div>
+    </div>
     <div id="settings-window" class="settings-page">
       <div id="display-row" class="field">
         <label for="display">Display mode</label>
         <input type="submit" id="display" value="Windowed" />
       </div>
     </div>
-    <input type="submit" id="resume" value="Resume" />
+    <input type="submit" id="resume" value="Close menu" />
     <input type="submit" id="leave" value="Return to launcher" />
   </div>
 </body>

@@ -4,9 +4,11 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/StringUtilities.h>
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <algorithm>
 #include <filesystem>
@@ -22,6 +24,7 @@
 #include <vector>
 
 #include "../utf8_path.hpp"
+#include "../audio/audio_devices.hpp"
 #include "../game_session.hpp"
 #include "../present/launcher_window.hpp"
 #include "../present/cursor_interface.hpp"
@@ -63,9 +66,77 @@ void enable_enhancements(Rml::ElementDocument& document, bool enabled) {
         static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).SetDisabled(!enabled);
 }
 
+void populate_device_select(Rml::ElementDocument& document, const char* id,
+                            const std::vector<std::string>& devices, const std::string& selected_device) {
+    auto& select = static_cast<Rml::ElementFormControlSelect&>(*document.GetElementById(id));
+    select.RemoveAll();
+    select.Add("System default", "");
+    bool found = selected_device.empty();
+    for (const auto& name : devices) {
+        select.Add(Rml::StringUtilities::EncodeRml(name), name);
+        if (name == selected_device) found = true;
+    }
+    if (!found) {
+        select.Add(Rml::StringUtilities::EncodeRml(selected_device + " (disconnected)"), selected_device);
+    }
+    select.SetValue(selected_device);
+}
+
+void populate_audio_devices(Rml::ElementDocument& document, const st::AudioSettings& audio) {
+    populate_device_select(document, "output-device", st::list_playback_devices(), audio.output_device);
+    populate_device_select(document, "input-device", st::list_recording_devices(), audio.input_device);
+}
+
+void update_audio_labels(Rml::ElementDocument& document, const st::AudioSettings& audio) {
+    document.GetElementById("master-volume-value")->SetInnerRML(
+        std::to_string(st::clamp_volume(audio.volume)) + "%");
+    document.GetElementById("mic-gain-value")->SetInnerRML(
+        std::to_string(st::clamp_mic_gain(audio.mic_gain)) + "%");
+}
+
+void enable_audio_controls(Rml::ElementDocument& document, bool enabled, st::MicMode mic_mode) {
+    for (const auto* id : {"master-volume", "mute-unfocused", "audio-interp", "output-device", "mic-mode"})
+        static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).SetDisabled(!enabled);
+    const bool use_device = enabled && st::mic_uses_device(mic_mode);
+    const bool use_gain = enabled && mic_mode != st::MicMode::off;
+    static_cast<Rml::ElementFormControl&>(*document.GetElementById("input-device")).SetDisabled(!use_device);
+    static_cast<Rml::ElementFormControl&>(*document.GetElementById("mic-gain")).SetDisabled(!use_gain);
+    document.GetElementById("master-volume-value")->SetClass("disabled", !enabled);
+    document.GetElementById("mic-gain-value")->SetClass("disabled", !use_gain);
+}
+
+void show_audio_settings(Rml::ElementDocument& document, const st::AudioSettings& audio) {
+    auto set = [&](const char* id, const std::string& value) {
+        auto& ctrl = static_cast<Rml::ElementFormControl&>(*document.GetElementById(id));
+        if (ctrl.GetValue() != value) ctrl.SetValue(value);
+    };
+    set("master-volume", std::to_string(st::clamp_volume(audio.volume)));
+    set("mute-unfocused", audio.mute_unfocused ? "on" : "off");
+    set("audio-interp", st::audio_interpolation_value(audio.interpolation));
+    set("output-device", audio.output_device);
+    set("mic-mode", st::mic_mode_value(audio.mic_mode));
+    set("input-device", audio.input_device);
+    set("mic-gain", std::to_string(st::clamp_mic_gain(audio.mic_gain)));
+    update_audio_labels(document, audio);
+}
+
+st::AudioSettings read_audio_settings(Rml::ElementDocument& document) {
+    auto get = [&](const char* id) {
+        return static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).GetValue();
+    };
+    const int volume = st::clamp_volume(int(std::lround(std::atof(get("master-volume").c_str()))));
+    const bool mute_unfocused = get("mute-unfocused") == "on";
+    const auto interpolation = st::parse_audio_interpolation(get("audio-interp"));
+    const std::string output_device = get("output-device");
+    const auto mic_mode = st::parse_mic_mode(get("mic-mode"));
+    const std::string input_device = get("input-device");
+    const int mic_gain = st::clamp_mic_gain(int(std::lround(std::atof(get("mic-gain").c_str()))));
+    return {volume, mute_unfocused, interpolation, output_device, mic_mode, input_device, mic_gain};
+}
+
 bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) {
     if (!id.starts_with("tab-") || !document.GetElementById(id)) return false;
-    for (const std::string key : {"screens", "features", "window", "game"}) {
+    for (const std::string key : {"screens", "features", "audio", "window", "game"}) {
         auto* tab = document.GetElementById("tab-" + key);
         if (!tab) continue;
         const bool selected = id == tab->GetId();
@@ -82,12 +153,17 @@ public:
     Launcher(Rml::ElementDocument& document, SDL_Window* window, fs::path checkout, fs::path settings)
         : document_(document), window_(window), checkout_(std::move(checkout)), settings_(std::move(settings)),
           prefs_(settings_) {
+        syncing_ = true;
         control("scale").SetValue(prefs_.scale);
         control("language").SetValue(prefs_.language);
+        control("pause-on-menu").SetValue(prefs_.pause_on_menu ? "on" : "off");
         control("window-mode").SetValue(prefs_.window);
         control("screen-layout").SetValue(layout_value(prefs_.layout));
         control("auto-join").SetValue(prefs_.automatic_join ? "automatic" : "manual");
         show_enhancements(document_, prefs_.enhancements);
+        populate_audio_devices(document_, prefs_.audio);
+        show_audio_settings(document_, prefs_.audio);
+        syncing_ = false;
         document_.AddEventListener(Rml::EventId::Click, this);
         document_.AddEventListener(Rml::EventId::Change, this);
         update_rom_label();
@@ -103,12 +179,16 @@ public:
 
     void ProcessEvent(Rml::Event& event) override {
         if (event.GetId() == Rml::EventId::Change) {
+            if (syncing_) return;
             prefs_.scale = control("scale").GetValue();
             prefs_.language = control("language").GetValue();
+            prefs_.pause_on_menu = control("pause-on-menu").GetValue() == "on";
             prefs_.window = control("window-mode").GetValue();
             prefs_.layout = parse_screen_layout(control("screen-layout").GetValue());
             prefs_.automatic_join = control("auto-join").GetValue() != "manual";
             prefs_.enhancements = read_enhancements(document_);
+            prefs_.audio = read_audio_settings(document_);
+            update_audio_labels(document_, prefs_.audio);
             persist();
             update_buttons();
             return;
@@ -178,7 +258,8 @@ public:
             const uint8_t language = prefs_.language == "fr" ? 2 : prefs_.language == "es" ? 5 : 1;
             ready_ = st::GameLaunch{path_from_utf8(prefs_.rom), module, language,
                                     prefs_.scale[0] - '0', prefs_.window == "fullscreen", prefs_.layout,
-                                    prefs_.automatic_join, prefs_.enhancements};
+                                    prefs_.automatic_join, prefs_.enhancements, prefs_.audio,
+                                    prefs_.pause_on_menu};
         } else if (action_ == Action::play && result == 0) {
             show_status("Preparation did not return a game module.", true);
         }
@@ -187,20 +268,50 @@ public:
 
     bool busy() const { return dialog_open_ || process_ != nullptr; }
     void save_display_mode(bool fullscreen) {
+        syncing_ = true;
         prefs_.window = fullscreen ? "fullscreen" : "windowed";
         control("window-mode").SetValue(prefs_.window);
+        syncing_ = false;
         persist();
     }
     st::ScreenLayout screen_layout() const { return prefs_.layout; }
     bool automatic_join() const { return prefs_.automatic_join; }
+    bool pause_on_menu() const { return prefs_.pause_on_menu; }
     st::ScreenEnhancements screen_enhancements() const { return prefs_.enhancements; }
+    const st::AudioSettings& audio_settings() const { return prefs_.audio; }
+    void save_pause_on_menu(bool pause) {
+        syncing_ = true;
+        control("pause-on-menu").SetValue(pause ? "on" : "off");
+        syncing_ = false;
+        prefs_.pause_on_menu = pause;
+        persist();
+        update_buttons();
+    }
+    void refresh_audio_devices() {
+        syncing_ = true;
+        populate_audio_devices(document_, prefs_.audio);
+        show_audio_settings(document_, prefs_.audio);
+        syncing_ = false;
+        update_buttons();
+    }
     void save_screen_settings(st::ScreenLayout layout, bool automatic_join, st::ScreenEnhancements enhancements) {
+        syncing_ = true;
         control("screen-layout").SetValue(layout_value(layout));
         control("auto-join").SetValue(automatic_join ? "automatic" : "manual");
         show_enhancements(document_, enhancements);
+        syncing_ = false;
         prefs_.layout = layout;
         prefs_.automatic_join = automatic_join;
         prefs_.enhancements = enhancements;
+        persist();
+        update_buttons();
+    }
+    void save_audio_settings(const st::AudioSettings& audio) {
+        syncing_ = true;
+        populate_audio_devices(document_, audio);
+        show_audio_settings(document_, audio);
+        syncing_ = false;
+        prefs_.audio = audio;
         persist();
         update_buttons();
     }
@@ -271,9 +382,10 @@ private:
         control("rebuild").SetDisabled(busy() || !verified_);
         control("remove-cache").SetDisabled(busy() || cached_builds_ == 0);
         control("open-log").SetDisabled(run_log_.empty());
-        for (const auto id : {"scale", "language", "window-mode", "screen-layout", "auto-join"})
+        for (const auto id : {"scale", "language", "pause-on-menu", "window-mode", "screen-layout", "auto-join"})
             control(id).SetDisabled(busy());
         enable_enhancements(document_, !busy() && prefs_.automatic_join);
+        enable_audio_controls(document_, !busy(), prefs_.audio.mic_mode);
     }
 
     void show_steps(bool show) {
@@ -428,7 +540,7 @@ private:
     std::optional<std::string> selection_;
     Action action_ = Action::inspect;
     unsigned cached_builds_ = 0;
-    bool dialog_open_ = false, verified_ = false, reported_error_ = false, steps_visible_ = false;
+    bool dialog_open_ = false, verified_ = false, reported_error_ = false, steps_visible_ = false, syncing_ = false;
 };
 
 class PauseMenu final : public st::GamePauseMenu, private Rml::EventListener {
@@ -446,16 +558,30 @@ public:
 
     void open() override {
         action_ = st::PauseAction::stay;
+        syncing_ = true;
         update_display_button();
+        update_pause_mode_button();
         control("pause-screen-layout").SetValue(layout_value(launcher_.screen_layout()));
         control("auto-join").SetValue(launcher_.automatic_join() ? "automatic" : "manual");
         show_enhancements(document_, launcher_.screen_enhancements());
         enable_enhancements(document_, launcher_.automatic_join());
+        populate_audio_devices(document_, launcher_.audio_settings());
+        show_audio_settings(document_, launcher_.audio_settings());
+        enable_audio_controls(document_, true, launcher_.audio_settings().mic_mode);
+        syncing_ = false;
         document_.Show();
         document_.GetElementById("resume")->Focus();
     }
     void close() override { document_.Hide(); }
-    void input(SDL_Event& event) override { window_.menu_input(context_, event); }
+    void input(SDL_Event& event) override {
+        if (event.type == SDL_EVENT_AUDIO_DEVICE_ADDED || event.type == SDL_EVENT_AUDIO_DEVICE_REMOVED) {
+            syncing_ = true;
+            populate_audio_devices(document_, launcher_.audio_settings());
+            show_audio_settings(document_, launcher_.audio_settings());
+            syncing_ = false;
+        }
+        window_.menu_input(context_, event);
+    }
     bool draw() override { return window_.draw_pause(context_); }
     st::PauseAction action() const override { return action_; }
 
@@ -466,21 +592,38 @@ private:
         document_.GetElementById("display")->SetAttribute("value", fullscreen() ? "Fullscreen" : "Windowed");
     }
 
+    void update_pause_mode_button() {
+        const bool paused = launcher_.pause_on_menu();
+        document_.SetClass("paused", paused);
+        document_.GetElementById("pause-title")->SetInnerRML(paused ? "Paused" : "Menu");
+        auto* mode = document_.GetElementById("pause-mode");
+        mode->SetClass("active", paused);
+        mode->SetAttribute("value", paused ? "Pause game: On" : "Pause game: Off");
+        document_.GetElementById("resume")->SetAttribute("value", paused ? "Resume" : "Close menu");
+    }
+
     Rml::ElementFormControl& control(const char* id) {
         return static_cast<Rml::ElementFormControl&>(*document_.GetElementById(id));
     }
 
     void ProcessEvent(Rml::Event& event) override {
         if (event.GetId() == Rml::EventId::Change) {
-            if (document_.IsVisible()) {
+            if (!syncing_ && document_.IsVisible()) {
                 const auto layout = parse_screen_layout(control("pause-screen-layout").GetValue());
                 const bool automatic_join = control("auto-join").GetValue() != "manual";
                 const auto enhancements = read_enhancements(document_);
+                const auto audio = read_audio_settings(document_);
                 enable_enhancements(document_, automatic_join);
+                update_audio_labels(document_, audio);
+                enable_audio_controls(document_, true, audio.mic_mode);
                 if (layout != launcher_.screen_layout() || automatic_join != launcher_.automatic_join() ||
                     enhancements != launcher_.screen_enhancements()) {
                     window_.set_screen_layout(layout, automatic_join, enhancements);
                     launcher_.save_screen_settings(layout, automatic_join, enhancements);
+                }
+                if (audio != launcher_.audio_settings()) {
+                    window_.set_audio_settings(audio);
+                    launcher_.save_audio_settings(audio);
                 }
             }
             return;
@@ -492,7 +635,12 @@ private:
         if (select_settings_tab(document_, id)) return;
         if (id == "resume") action_ = st::PauseAction::resume;
         else if (id == "leave") action_ = st::PauseAction::leave;
-        else if (id == "display" && SDL_SetWindowFullscreen(window_.window(), !fullscreen())) {
+        else if (id == "pause-mode") {
+            const bool next = !launcher_.pause_on_menu();
+            window_.set_pause_on_menu(next);
+            launcher_.save_pause_on_menu(next);
+            update_pause_mode_button();
+        } else if (id == "display" && SDL_SetWindowFullscreen(window_.window(), !fullscreen())) {
             update_display_button();
             launcher_.save_display_mode(fullscreen());
         }
@@ -503,6 +651,7 @@ private:
     LauncherWindow& window_;
     Launcher& launcher_;
     st::PauseAction action_ = st::PauseAction::stay;
+    bool syncing_ = false;
 };
 
 bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDocument& document,
@@ -523,9 +672,12 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
         return Rect{start.x, start.y, start.x + size.x, start.y + size.y};
     };
     constexpr std::array ids{"mark", "game-heading", "rom", "browse", "status", "play", "settings-heading",
-                             "tab-screens", "tab-features", "tab-window", "tab-game",
+                             "tab-screens", "tab-features", "tab-audio", "tab-window", "tab-game",
                              "unify-cutscenes", "narrative-subtitles", "hide-secondary",
-                             "window-mode", "screen-layout", "auto-join", "scale", "language", "cache-summary", "rebuild", "remove-cache",
+                             "master-volume", "master-volume-value", "mute-unfocused", "audio-interp",
+                             "output-device", "mic-mode", "input-device", "mic-gain", "mic-gain-value",
+                             "window-mode", "screen-layout", "auto-join", "scale", "language", "pause-on-menu",
+                             "cache-summary", "rebuild", "remove-cache",
                              "toggle-steps", "open-log"};
     std::array<Rect, ids.size()> controls{};
     for (size_t i = 0; i < ids.size(); ++i) {
@@ -640,6 +792,7 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         if (!check_layout(window, *context, *document, 1040, 610, false, false, {})) return 4;
         for (const auto& [tab, field] : {std::pair{"tab-window", "window-mode"}, std::pair{"tab-game", "language"},
                                          std::pair{"tab-features", "unify-cutscenes"},
+                                         std::pair{"tab-audio", "master-volume"},
                                          std::pair{"tab-screens", "screen-layout"}}) {
             document->GetElementById(tab)->DispatchEvent(Rml::EventId::Click, {});
             if (!window.draw(*context) || !document->GetElementById(field)->IsVisible(true)) return 11;
@@ -657,6 +810,28 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         for (const auto* id : kEnhancementIds)
             if (!static_cast<Rml::ElementFormControl&>(*document->GetElementById(id)).IsDisabled()) return 14;
         static_cast<Rml::ElementFormControl&>(*document->GetElementById("auto-join")).SetValue("automatic");
+        document->GetElementById("tab-audio")->DispatchEvent(Rml::EventId::Click, {});
+        if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("audio-wide.bmp")) ||
+            !check_layout(window, *context, *document, 390, 300, true, true, preview("audio-short.bmp"))) return 15;
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("master-volume")).SetValue("45");
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("mute-unfocused")).SetValue("on");
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("audio-interp")).SetValue("cubic");
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("mic-mode")).SetValue("virtual");
+        if (launcher.audio_settings().volume != 45 || !launcher.audio_settings().mute_unfocused ||
+            launcher.audio_settings().interpolation != st::AudioInterpolation::cubic ||
+            document->GetElementById("master-volume-value")->GetInnerRML() != "45%" ||
+            !static_cast<Rml::ElementFormControl&>(*document->GetElementById("input-device")).IsDisabled() ||
+            static_cast<Rml::ElementFormControl&>(*document->GetElementById("mic-gain")).IsDisabled()) return 16;
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("mic-mode")).SetValue("off");
+        if (!static_cast<Rml::ElementFormControl&>(*document->GetElementById("input-device")).IsDisabled() ||
+            !static_cast<Rml::ElementFormControl&>(*document->GetElementById("mic-gain")).IsDisabled()) return 16;
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("mic-mode")).SetValue("automatic");
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("master-volume")).SetValue("100");
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("mute-unfocused")).SetValue("off");
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("audio-interp")).SetValue("none");
+        document->GetElementById("tab-game")->DispatchEvent(Rml::EventId::Click, {});
+        if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, {}) ||
+            !check_layout(window, *context, *document, 390, 300, true, true, {})) return 17;
         document->GetElementById("tab-screens")->DispatchEvent(Rml::EventId::Click, {});
         auto* toggle_steps = document->GetElementById("toggle-steps");
         auto* details = document->GetElementById("build-details");
@@ -681,12 +856,33 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         std::fill(tiles.begin() + st::ds_width * st::ds_screen_height, tiles.end(), 0xff66845c);
         document->Hide();
         pause.open();
+        if (window.pause_on_menu() || launcher.pause_on_menu() ||
+            pause_document->GetElementById("pause-title")->GetInnerRML() != "Menu") return 17;
+        pause_document->GetElementById("pause-mode")->DispatchEvent(Rml::EventId::Click, {});
+        if (!window.pause_on_menu() || !launcher.pause_on_menu() ||
+            static_cast<Rml::ElementFormControl&>(*document->GetElementById("pause-on-menu")).GetValue() != "on" ||
+            pause_document->GetElementById("pause-title")->GetInnerRML() != "Paused" || !pause.draw()) return 17;
+        pause_document->GetElementById("pause-mode")->DispatchEvent(Rml::EventId::Click, {});
+        if (window.pause_on_menu() || launcher.pause_on_menu() ||
+            static_cast<Rml::ElementFormControl&>(*document->GetElementById("pause-on-menu")).GetValue() != "off" ||
+            pause_document->GetElementById("pause-title")->GetInnerRML() != "Menu" || !pause.draw()) return 17;
         pause_document->GetElementById("tab-features")->DispatchEvent(Rml::EventId::Click, {});
         for (unsigned mask = 0; mask < 8; ++mask) {
             show_enhancements(*pause_document, {bool(mask & 1), bool(mask & 2), bool(mask & 4)});
             if (window.screen_features() != mask || launcher.screen_enhancements().mask() != mask ||
                 read_enhancements(*document).mask() != mask || !pause.draw()) return 14;
         }
+        pause_document->GetElementById("tab-audio")->DispatchEvent(Rml::EventId::Click, {});
+        static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("master-volume")).SetValue("35");
+        static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("audio-interp")).SetValue("gaussian");
+        static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("mic-mode")).SetValue("hybrid");
+        static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("mic-gain")).SetValue("150");
+        if (window.audio_settings().volume != 35 ||
+            window.audio_settings().interpolation != st::AudioInterpolation::gaussian ||
+            window.audio_settings().mic_mode != st::MicMode::hybrid ||
+            window.audio_settings().mic_gain != 150 ||
+            launcher.audio_settings() != window.audio_settings() ||
+            read_audio_settings(*document) != window.audio_settings() || !pause.draw()) return 16;
         pause_document->GetElementById("tab-screens")->DispatchEvent(Rml::EventId::Click, {});
         for (const auto& [layout, key] : kLayoutOptions) {
             layout_control.SetValue(key);
@@ -731,7 +927,9 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         return !launcher.busy() && message.starts_with("Unsupported ROM.") ? 0 : 3;
     }
     while (true) {
-        const bool open = window.process_events(*context);
+        bool audio_devices_changed = false;
+        const bool open = window.process_events(*context, &audio_devices_changed);
+        if (audio_devices_changed) launcher.refresh_audio_devices();
         launcher.update();
         if (!open && !launcher.busy()) break;
         if (const auto game = launcher.take_launch()) {

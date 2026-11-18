@@ -39,19 +39,28 @@
 //     --layer-shots         with --shots, also write private foreground-plane checkpoints
 //     --screen-features <mask>  independent cutscene/subtitle/secondary-screen bits (1/2/4; default 7)
 //     --preview-tower-camera  headless research preview of the asymmetric Tower camera; touch adaptation pending
+//     --volume <0-100>       master output volume in percent (default 100)
+//     --mute-unfocused       mute output audio while the window does not have focus
+//     --audio-interp <mode>  SPU interpolation: none|linear|cosine|cubic|gaussian (default none)
+//     --output-device <name> playback device name (default: system default)
+//     --mic-mode <mode>      microphone mode: automatic|real|virtual|hybrid|off (default automatic)
+//     --input-device <name>  recording device name (default: system default)
+//     --mic-gain <0-200>     microphone capture and virtual-blow level in percent (default 100)
+//     --mic-log <file>       write microphone Start/Stop frames and peak levels (no audio samples)
 //     --perf, --trace-threads, --trace-calls   the runtime's logs
 //   Script: one step per line, "#" starts a comment. Frames count from 1, the first frame shown.
 //     <frame> press <KEY>[+<KEY>...] [<frames held, default 6>]
 //     <frame> tap <KEY>[+<KEY>...]                           (pressed and released within the frame)
 //     <frame> touch <x> <y> [<frames held, default 6>]       (bottom screen, 0-255 x 0-191)
 //     <frame> drag <x1> <y1> <x2> <y2> [<frames, default 6>] (a stylus stroke in a straight line)
+//     <frame> blow [<frames held, default 30>]               (synthesized microphone breath)
 //     <frame> shot <name>
 //     <frame> type <text>                     (only while the save-name editor accepts input)
 //     <frame> backspace                       (same editor)
 //     <frame> quit
 //   Keys: A B X Y L R START SELECT UP DOWN LEFT RIGHT.
 // Keyboard: arrows = D-pad, X = A, Z = B, S = X, A = Y, Q = L, W = R, Enter = Start, Backspace = Select,
-//           Tab (held) = fast forward, F11 = full screen. Mouse: the bottom screen is the touch screen.
+//           Space / C (held) = virtual blow, Tab (held) = fast forward, F11 = full screen. Mouse: touch screen.
 #define SDL_MAIN_HANDLED
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -79,6 +88,8 @@
 #include "ntr/recomp.h"
 #include "ntr/rom.hpp"
 #include "ntr/runtime.hpp"
+#include "audio/audio_devices.hpp"
+#include "audio/mic_source.hpp"
 #include "game_session.hpp"
 #include "name_keyboard.hpp"
 #include "screen_context.hpp"
@@ -109,7 +120,7 @@ constexpr KnownDump kKnown[] = {
 };
 
 struct Options {
-    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile, scene_profile;
+    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile, scene_profile, mic_log;
     std::string wireless_group, player_name = "Link";
     std::vector<std::pair<uint64_t, std::string>> ram_dumps;
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
@@ -117,17 +128,29 @@ struct Options {
          layer_shots = false;
     int scale = 2, cpu_speed = 4, scene_stride = 30;
     uint32_t screen_features = st::ScreenEnhancements{}.mask();
+    st::AudioSettings audio;
     double cinematic_aspect = 0;
     uint64_t exit_after = 0;
     uint8_t language = 1;
 };
+
+ntr::AudioInterpolation runtime_audio_interpolation(st::AudioInterpolation interp) {
+    switch (interp) {
+    case st::AudioInterpolation::linear: return ntr::AudioInterpolation::Linear;
+    case st::AudioInterpolation::cosine: return ntr::AudioInterpolation::Cosine;
+    case st::AudioInterpolation::cubic: return ntr::AudioInterpolation::Cubic;
+    case st::AudioInterpolation::gaussian: return ntr::AudioInterpolation::Gaussian;
+    case st::AudioInterpolation::none:
+    default: return ntr::AudioInterpolation::None;
+    }
+}
 
 // ---- scripted input
 enum : uint32_t { kA = 1, kB = 2, kSelect = 4, kStart = 8, kRight = 16, kLeft = 32, kUp = 64, kDown = 128,
                   kR = 256, kL = 512, kX = 1024, kY = 2048 };
 
 struct Step {
-    enum Kind { Press, Tap, Touch, Shot, Type, EraseName, Quit } kind;
+    enum Kind { Press, Tap, Touch, Blow, Shot, Type, EraseName, Quit } kind;
     uint64_t frame = 0, len = 6;
     uint32_t keys = 0;
     int x = 0, y = 0;
@@ -177,6 +200,10 @@ bool parse_step(std::string line, const std::string& where, Step& s, bool& blank
             auto in_screen = [](int x, int y) { return x >= 0 && x < kW && y >= 0 && y < kH; };
             if (!(ls >> s.x >> s.y >> s.x2 >> s.y2) || !in_screen(s.x, s.y) || !in_screen(s.x2, s.y2))
                 return error = where + "drag needs x1 y1 x2 y2 (x 0-255, y 0-191)", false;
+            ls >> s.len;
+        } else if (verb == "blow") {
+            s.kind = Step::Blow;
+            s.len = 30;
             ls >> s.len;
         } else if (verb == "shot") {
             s.kind = Step::Shot;
@@ -259,7 +286,7 @@ struct Shared {
     std::atomic<uint32_t> screen_features{st::ScreenEnhancements{}.mask()};
     std::atomic<uint32_t> held{0}, pressed{0};
     std::atomic<int> touch_x{0}, touch_y{0};
-    std::atomic<bool> touching{false}, fast{false}, quit{false}, done{false};
+    std::atomic<bool> touching{false}, blowing{false}, fast{false}, quit{false}, done{false};
     std::mutex pause_mutex;
     std::condition_variable pause_cv;
     bool paused = false;
@@ -273,21 +300,58 @@ void queue_name_text(st::NameKeyboard& keyboard, std::string_view text) {
 
 class StHost : public st::NameHost {
 public:
-    StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes, bool track_scene)
+    StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes, FILE* mic_log, bool track_scene)
         : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes), track_scene_(track_scene),
-          screen_context_(o.preview_tower_camera) {}
-    void attach(ntr::Runtime* rt) { rt_ = rt; }
+          screen_context_(o.preview_tower_camera), audio_settings_(o.audio) {
+        mic_.set_settings(o.audio);
+        mic_.set_log(mic_log, &frame_);
+    }
+    void attach(ntr::Runtime* rt) {
+        std::lock_guard lock(audio_mutex_);
+        rt_ = rt;
+    }
     uint64_t frames() const { return frame_; }
     uint64_t interp_total() const { return interp_total_; }
     uint64_t cinematic_frames() const { return cinematic_frames_; }
-    void set_audio(SDL_AudioStream* a) { audio_ = a; }
-    void pause_audio(bool paused) {
-        if (!audio_) return;
+    void enable_audio_output(bool window_focused) {
         std::lock_guard lock(audio_mutex_);
-        audio_paused_ = paused;
-        audio_started_ = false;
-        SDL_PauseAudioStreamDevice(audio_);
-        SDL_ClearAudioStream(audio_);
+        audio_enabled_ = true;
+        window_focused_ = window_focused;
+        open_audio_output_locked();
+    }
+    void apply_audio_settings(const st::AudioSettings& settings) {
+        {
+            std::lock_guard lock(audio_mutex_);
+            const bool reopen = audio_enabled_ && (!audio_ || settings.output_device != audio_settings_.output_device);
+            const bool interp_changed = settings.interpolation != audio_settings_.interpolation;
+            audio_settings_ = settings;
+            if (reopen) open_audio_output_locked();
+            else if (audio_) SDL_SetAudioStreamGain(audio_.get(), st::effective_output_gain(audio_settings_, window_focused_));
+            if (interp_changed && rt_) rt_->set_audio_interpolation(runtime_audio_interpolation(settings.interpolation));
+        }
+        mic_.set_settings(settings);
+    }
+    void set_window_focused(bool focused) {
+        std::lock_guard lock(audio_mutex_);
+        if (window_focused_ == focused) return;
+        window_focused_ = focused;
+        if (audio_) SDL_SetAudioStreamGain(audio_.get(), st::effective_output_gain(audio_settings_, window_focused_));
+    }
+    void refresh_audio_devices() {
+        std::lock_guard lock(audio_mutex_);
+        if (audio_enabled_ && (!audio_ || !audio_settings_.output_device.empty())) open_audio_output_locked();
+    }
+    void pause_audio(bool paused) {
+        {
+            std::lock_guard lock(audio_mutex_);
+            audio_paused_ = paused;
+            audio_started_ = false;
+            if (audio_) {
+                SDL_PauseAudioStreamDevice(audio_.get());
+                SDL_ClearAudioStream(audio_.get());
+            }
+        }
+        mic_.set_paused(paused);
     }
     void set_profile(std::ostream* stream) { profile_ = stream; }
     void set_scene_profile(std::ostream* stream, const ntr::GameCode& code) {
@@ -374,7 +438,11 @@ public:
             }
         }
         if (profile_) {
-            const int queued = audio_ ? SDL_GetAudioStreamQueued(audio_) : 0;
+            int queued = 0;
+            {
+                std::lock_guard lock(audio_mutex_);
+                queued = audio_ ? SDL_GetAudioStreamQueued(audio_.get()) : 0;
+            }
             *profile_ << frame_ << ',' << profile_start << ','
                 << (profile_previous_ ? double(profile_start - profile_previous_) / 1e6 : 0) << ','
                 << f.emu_ms << ',' << camera_ms << ',' << double(SDL_GetTicksNS() - profile_start) / 1e6 << ','
@@ -383,7 +451,7 @@ public:
         }
         // The script's steps for this frame; input set now is what the game reads in the next frame.
         uint32_t held = 0, pressed = 0;
-        bool touch = false;
+        bool touch = false, blow = false;
         int tx = 0, ty = 0;
         for (const Step& s : script_) {
             const bool active = frame_ >= s.frame && frame_ < s.frame + s.len;
@@ -398,6 +466,8 @@ public:
                     const int64_t i = int64_t(frame_ - s.frame), n = int64_t(s.len - 1);
                     tx = s.x + int((s.x2 - s.x) * i / n), ty = s.y + int((s.y2 - s.y) * i / n);
                 }
+            } else if (s.kind == Step::Blow && active) {
+                blow = true;
             } else if (s.kind == Step::Shot && frame_ == s.frame && f.top && f.bottom && !o_.shots.empty()) {
                 const fs::path p = o_.shots / (s.name + ".bmp");
                 if (!write_bmp(p, f.top, f.bottom)) std::fprintf(stderr, "cannot write %s\n", p.string().c_str());
@@ -423,8 +493,9 @@ public:
             if (sh_.paused) {
                 rt_->set_buttons(0, 0);
                 rt_->release_touch();
+                mic_.set_blowing(false);
                 touched_ = false;
-                sh_.pause_cv.wait(lock, [&] { return !sh_.paused; });
+                sh_.pause_cv.wait(lock, [&] { return !sh_.paused || sh_.quit.load(); });
                 deadline_ = 0;
             }
         }
@@ -436,13 +507,15 @@ public:
         if (!touch && sh_.touching) touch = true, tx = sh_.touch_x, ty = sh_.touch_y;
         if (touch) rt_->touch(tx, ty), touched_ = true;
         else if (touched_) rt_->release_touch(), touched_ = false;
-        if (!o_.record.empty()) record(held, pressed, touch, tx, ty);
+        blow = blow || sh_.blowing.load();
+        mic_.set_blowing(blow);
+        if (!o_.record.empty()) record(held, pressed, touch, tx, ty, blow);
         return true;
     }
 
     // The session's input as script lines (one segment per key and per touch position), in frame order.
     std::vector<std::string> recording() {
-        record(0, 0, false, 0, 0);  // close what is still held
+        record(0, 0, false, 0, 0, false);  // close what is still held
         std::sort(rec_.begin(), rec_.end());
         std::vector<std::string> lines;
         for (auto& r : rec_) lines.push_back(r.second);
@@ -450,22 +523,25 @@ public:
     }
 
     void on_audio(const int16_t* samples, size_t frames) override {
-        if (!audio_) return;
         std::lock_guard lock(audio_mutex_);
-        if (audio_paused_) return;
-        const int queued = SDL_GetAudioStreamQueued(audio_);
+        if (!audio_ || audio_paused_) return;
+        const int queued = SDL_GetAudioStreamQueued(audio_.get());
         if (profile_ && audio_started_ && frame_ >= 180 && queued == 0) ++audio_empty_feeds_;
         if (queued > 48000 * 4 / 10) { // keep latency bounded (~100 ms)
             audio_dropped_samples_ += frames;
             return;
         }
-        SDL_PutAudioStreamData(audio_, samples, int(frames * 4));
+        SDL_PutAudioStreamData(audio_.get(), samples, int(frames * 4));
         // Prime 50 ms before playback (also after resuming). Short scheduling hitches can then
         // consume queued samples instead of immediately starving the device. Sustained slow
         // execution still needs a rendering fix; increasing the buffer cannot repair it.
-        if (!audio_started_ && SDL_GetAudioStreamQueued(audio_) >= 48000 * 4 / 20)
-            audio_started_ = SDL_ResumeAudioStreamDevice(audio_);
+        if (!audio_started_ && SDL_GetAudioStreamQueued(audio_.get()) >= 48000 * 4 / 20)
+            audio_started_ = SDL_ResumeAudioStreamDevice(audio_.get());
     }
+
+    void on_mic_start() override { mic_.on_start(); }
+    void on_mic_stop() override { mic_.on_stop(); }
+    size_t on_mic_read(int16_t* samples, size_t max_samples) override { return mic_.on_read(samples, max_samples); }
 
     // The runtime reports every backup write the game makes, and one in-game save is many small writes. Writing the
     // whole file each time stalled the game thread for over a second per save; the file is now written once the game
@@ -536,10 +612,22 @@ private:
         }
     }
 
+    void open_audio_output_locked() {
+        audio_.reset();
+        audio_started_ = false;
+        const SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 48000};
+        const SDL_AudioDeviceID id = st::resolve_playback_device(audio_settings_.output_device);
+        audio_.reset(SDL_OpenAudioDeviceStream(id, &spec, nullptr, nullptr));
+        if (!audio_ && id != SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK)
+            audio_.reset(SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr));
+        if (!audio_) std::fprintf(stderr, "no sound: %s\n", SDL_GetError());
+        else SDL_SetAudioStreamGain(audio_.get(), st::effective_output_gain(audio_settings_, window_focused_));
+    }
+
     // Input given to the game for the frame after frame_, as segments: a key held over frames [from, n) becomes
     // "<from> press KEY <n - from>" (pressed at from), a press and release within one frame "<n> tap KEY", a touch at
     // one position over [from, n) "<from> touch x y <n - from>". Replaying the lines gives the game the same input.
-    void record(uint32_t held, uint32_t pressed, bool touch, int tx, int ty) {
+    void record(uint32_t held, uint32_t pressed, bool touch, int tx, int ty, bool blow) {
         static const char* kNames[12] = {"A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L", "X", "Y"};
         const uint64_t n = frame_;
         auto line = [&](uint64_t at, const std::string& text) { rec_.emplace_back(at, std::to_string(at) + " " + text); };
@@ -560,6 +648,11 @@ private:
             touch_from_ = 0;
         }
         if (touch && !touch_from_) touch_from_ = n, touch_x_ = tx, touch_y_ = ty;
+        if (blow_from_ && !blow) {
+            line(blow_from_, "blow " + std::to_string(n - blow_from_));
+            blow_from_ = 0;
+        }
+        if (blow && !blow_from_) blow_from_ = n;
     }
 
     void pace() {
@@ -581,9 +674,11 @@ private:
     st::ScreenContext screen_context_;
     std::array<uint32_t, kW * kH> narration_pixels_{};
     ntr::Runtime* rt_ = nullptr;
-    SDL_AudioStream* audio_ = nullptr;
+    std::unique_ptr<SDL_AudioStream, decltype(&SDL_DestroyAudioStream)> audio_{nullptr, SDL_DestroyAudioStream};
+    st::AudioSettings audio_settings_;
+    st::MicSource mic_;
     std::mutex audio_mutex_;
-    bool audio_started_ = false, audio_paused_ = false;
+    bool audio_enabled_ = false, window_focused_ = true, audio_started_ = false, audio_paused_ = false;
     std::ostream* profile_ = nullptr;
     std::ostream* scene_profile_ = nullptr;
     std::vector<uint32_t> scene_overlay_ids_;
@@ -597,7 +692,7 @@ private:
     bool save_dirty_ = false;
     uint64_t save_written_at_ = 0;
     bool touched_ = false;
-    uint64_t key_from_[12] = {}, touch_from_ = 0;  // the recorder's open segments (0: none)
+    uint64_t key_from_[12] = {}, touch_from_ = 0, blow_from_ = 0;  // the recorder's open segments (0: none)
     int touch_x_ = 0, touch_y_ = 0;
     std::vector<std::pair<uint64_t, std::string>> rec_;
 };
@@ -703,7 +798,37 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--wireless-group") o.wireless_group = next();
         else if (a == "--control") o.control = next_path();
         else if (a == "--player-name") o.player_name = next();
-        else if (a == "--language") {
+        else if (a == "--volume") {
+            const auto text = next(); char* end = nullptr;
+            const auto v = std::strtol(text.c_str(), &end, 10);
+            if (text.empty() || *end || v < 0 || v > 100)
+                return std::fprintf(stderr, "--volume needs an integer from 0 to 100\n"), false;
+            o.audio.volume = int(v);
+        } else if (a == "--mute-unfocused") {
+            o.audio.mute_unfocused = true;
+        } else if (a == "--audio-interp") {
+            const auto text = next();
+            if (!st::valid_audio_interpolation(text))
+                return std::fprintf(stderr, "--audio-interp: none, linear, cosine, cubic or gaussian\n"), false;
+            o.audio.interpolation = st::parse_audio_interpolation(text);
+        } else if (a == "--output-device") {
+            o.audio.output_device = next();
+        } else if (a == "--mic-mode") {
+            const auto text = next();
+            if (!st::valid_mic_mode(text))
+                return std::fprintf(stderr, "--mic-mode: automatic, real, virtual, hybrid or off\n"), false;
+            o.audio.mic_mode = st::parse_mic_mode(text);
+        } else if (a == "--input-device") {
+            o.audio.input_device = next();
+        } else if (a == "--mic-gain") {
+            const auto text = next(); char* end = nullptr;
+            const auto v = std::strtol(text.c_str(), &end, 10);
+            if (text.empty() || *end || v < 0 || v > 200)
+                return std::fprintf(stderr, "--mic-gain needs an integer from 0 to 200\n"), false;
+            o.audio.mic_gain = int(v);
+        } else if (a == "--mic-log") {
+            o.mic_log = next_path();
+        } else if (a == "--language") {
             const std::string l = next();
             o.language = l == "fr" ? 2 : l == "es" ? 5 : 1;
         } else if (!a.empty() && a[0] != '-' && o.rom.empty()) o.rom = path_from_utf8(a);
@@ -791,6 +916,11 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     FILE* hashes = nullptr;
     if (!o.hashes.empty() && !(hashes = std::fopen(o.hashes.string().c_str(), "w")))
         return std::fprintf(stderr, "cannot write %s\n", o.hashes.string().c_str()), 2;
+    std::unique_ptr<FILE, decltype(&std::fclose)> mic_log(nullptr, std::fclose);
+    if (!o.mic_log.empty()) {
+        mic_log.reset(std::fopen(o.mic_log.string().c_str(), "w"));
+        if (!mic_log) return std::fprintf(stderr, "cannot write %s\n", o.mic_log.string().c_str()), 2;
+    }
 
     if (o.frame_profile.empty())
         if (const char* path = std::getenv("ST_NATIVE_FRAME_PROFILE")) o.frame_profile = path_from_utf8(path);
@@ -857,6 +987,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     }
     ro.cpu_speed = o.cpu_speed;
     ro.fast_cart = !o.slow_cart;
+    ro.audio_interpolation = runtime_audio_interpolation(o.audio.interpolation);
     ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0 || !o.scene_profile.empty() || o.layer_shots;
 
     Shared sh;
@@ -865,14 +996,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         const auto event = SDL_RegisterEvents(1);
         if (event != Uint32(-1)) sh.frame_event = event;
     }
-    StHost host(o, sh, std::move(script), hashes, ro.cinematic_camera);
+    StHost host(o, sh, std::move(script), hashes, mic_log.get(), ro.cinematic_camera);
     if (frame_profile.is_open()) host.set_profile(&frame_profile);
     if (scene_profile.is_open()) host.set_scene_profile(&scene_profile, code);
 
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> owned_window(nullptr, SDL_DestroyWindow);
     std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)> renderer(nullptr, SDL_DestroyRenderer);
     std::unique_ptr<SDL_Texture, decltype(&SDL_DestroyTexture)> texture(nullptr, SDL_DestroyTexture);
-    std::unique_ptr<SDL_AudioStream, decltype(&SDL_DestroyAudioStream)> audio(nullptr, SDL_DestroyAudioStream);
     SDL_Window* window = presentation ? presentation->window() : nullptr;
     if (!o.headless) {
         if (!presentation) {
@@ -889,10 +1019,8 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         }
         if (o.fullscreen && !SDL_SetWindowFullscreen(window, true))
             std::fprintf(stderr, "cannot start in fullscreen: %s\n", SDL_GetError());
-        const SDL_AudioSpec spec = {SDL_AUDIO_S16, 2, 48000};
-        audio.reset(SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr));
-        if (!audio) std::fprintf(stderr, "no sound: %s\n", SDL_GetError());
-        host.set_audio(audio.get());
+        const bool focused = !window || (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+        host.enable_audio_output(focused);
     }
 
     // The game thread: the runtime and its guest threads (fibers) live there.
@@ -916,31 +1044,43 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     int test_stage = 0;
     if (!o.headless) {
         uint32_t kb = 0, pad = 0, stick = 0;
+        bool kb_blow = false, pad_blow = false, trig_blow = false;
         bool mouse_down = false;
-        bool menu_open = false;
+        bool menu_open = false, game_paused = false;
+        uint64_t applied_audio_rev = presentation ? presentation->audio_revision() : 0;
         uint64_t presented_frames = 0, previous_present_ns = 0;
         std::vector<uint32_t> frame(kW * kH * 3);
 
+        auto sync_pause = [&](bool want_paused) {
+            if (game_paused == want_paused) return;
+            game_paused = want_paused;
+            host.pause_audio(want_paused);
+            {
+                std::lock_guard lock(sh.pause_mutex);
+                sh.paused = want_paused;
+            }
+            sh.pause_cv.notify_all();
+        };
+
         auto change_menu = [&](bool open) {
             kb = pad = stick = 0;
+            kb_blow = pad_blow = trig_blow = false;
             mouse_down = false;
             sh.held = sh.pressed = 0;
-            sh.touching = sh.fast = false;
+            sh.touching = sh.blowing = sh.fast = false;
             host.name_keyboard.discard_pending();
             if (open && SDL_TextInputActive(window)) SDL_StopTextInput(window);
-            host.pause_audio(open);
+            const bool was_paused = game_paused;
+            menu_open = open;
+            sync_pause(open && (!presentation || presentation->pause_on_menu()));
             if (!open && presentation) {
                 sh.screen_features = presentation->screen_features();
                 sh.cinematic_aspect = presentation->cinematic_aspect();
-                std::lock_guard lock(sh.m);
-                sh.fresh = false; // discard a pre-pause frame composed with the former settings
+                if (was_paused) {
+                    std::lock_guard lock(sh.m);
+                    sh.fresh = false; // discard a pre-pause frame composed with the former settings
+                }
             }
-            {
-                std::lock_guard lock(sh.pause_mutex);
-                sh.paused = open;
-            }
-            sh.pause_cv.notify_one();
-            menu_open = open;
             if (open) menu->open();
             else menu->close();
         };
@@ -956,6 +1096,11 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         };
         while (!sh.done) {
             if (presentation) {
+                const uint64_t audio_rev = presentation->audio_revision();
+                if (audio_rev != applied_audio_rev) {
+                    applied_audio_rev = audio_rev;
+                    host.apply_audio_settings(presentation->audio_settings());
+                }
                 sh.cinematic_aspect = presentation->cinematic_aspect();
                 sh.screen_features = presentation->screen_features();
                 const bool edit_name = !menu_open && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) &&
@@ -971,6 +1116,10 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         sh.quit = true;
                         break;
                     }
+                    if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) host.set_window_focused(true);
+                    else if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) host.set_window_focused(false);
+                    else if (e.type == SDL_EVENT_AUDIO_DEVICE_ADDED || e.type == SDL_EVENT_AUDIO_DEVICE_REMOVED)
+                        host.refresh_audio_devices();
                     if (menu && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                         (e.key.scancode == SDL_SCANCODE_ESCAPE || e.key.scancode == SDL_SCANCODE_F1)) {
                         change_menu(!menu_open);
@@ -993,7 +1142,9 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         continue;
                     }
                     switch (e.type) {
-                    case SDL_EVENT_WINDOW_FOCUS_LOST: kb = 0; mouse_down = false; sh.touching = false; sh.fast = false; break;
+                    case SDL_EVENT_WINDOW_FOCUS_LOST:
+                        kb = 0; kb_blow = false; mouse_down = false; sh.touching = false; sh.fast = false;
+                        break;
                     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                         if (presentation) mouse_down = sh.touching = false;
                         break;
@@ -1010,6 +1161,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                             SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
                         else if (presentation && SDL_TextInputActive(window)) break;
                         else if (e.key.scancode == SDL_SCANCODE_TAB) sh.fast = true;
+                        else if (e.key.scancode == SDL_SCANCODE_SPACE || e.key.scancode == SDL_SCANCODE_C) kb_blow = true;
                         else if (const uint32_t b = key_for(e.key.scancode)) {
                             kb |= b;
                             if (!e.key.repeat) sh.pressed |= b;
@@ -1017,13 +1169,18 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         break;
                     case SDL_EVENT_KEY_UP:
                         if (e.key.scancode == SDL_SCANCODE_TAB) sh.fast = false;
+                        if (e.key.scancode == SDL_SCANCODE_SPACE || e.key.scancode == SDL_SCANCODE_C) kb_blow = false;
                         kb &= ~key_for(e.key.scancode);
                         break;
                     case SDL_EVENT_GAMEPAD_ADDED: SDL_OpenGamepad(e.gdevice.which); break;
                     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                        if (const uint32_t b = pad_key_for(e.gbutton.button)) pad |= b, sh.pressed |= b;
+                        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) pad_blow = true;
+                        else if (const uint32_t b = pad_key_for(e.gbutton.button)) pad |= b, sh.pressed |= b;
                         break;
-                    case SDL_EVENT_GAMEPAD_BUTTON_UP: pad &= ~pad_key_for(e.gbutton.button); break;
+                    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+                        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) pad_blow = false;
+                        else pad &= ~pad_key_for(e.gbutton.button);
+                        break;
                     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
                         if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX)
                             stick = (stick & ~(kLeft | kRight)) | (e.gaxis.value < -16000 ? kLeft : 0) |
@@ -1031,6 +1188,8 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         else if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY)
                             stick = (stick & ~(kUp | kDown)) | (e.gaxis.value < -16000 ? kUp : 0) |
                                     (e.gaxis.value > 16000 ? kDown : 0);
+                        else if (e.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
+                            trig_blow = e.gaxis.value > 8000;
                         break;
                     case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -1058,13 +1217,35 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     }
                 } while (SDL_PollEvent(&e));
                 sh.held = kb | pad | stick;
+                sh.blowing = kb_blow || pad_blow || trig_blow;
             }
             if (sh.quit) {
                 if (menu_open) change_menu(false);
+                sync_pause(false);
                 continue;
             }
+            sync_pause(menu_open && (!presentation || presentation->pause_on_menu()));
             if (menu_open) {
-                if (!menu->draw()) view_error = sh.quit = true;
+                if (presentation) {
+                    bool fresh = false, shared_scene = false, cinematic = false;
+                    {
+                        std::lock_guard<std::mutex> lock(sh.m);
+                        fresh = sh.fresh;
+                        if (fresh) {
+                            frame.swap(sh.pixels);
+                            shared_scene = sh.shared_scene;
+                            cinematic = sh.cinematic;
+                            sh.fresh = false;
+                        }
+                    }
+                    if (fresh) {
+                        saw_shared_scene |= shared_scene;
+                        saw_cinematic |= cinematic;
+                        if (!presentation->update_game_frame(frame.data(), shared_scene, false, cinematic))
+                            view_error = sh.quit = true;
+                    }
+                }
+                if (!view_error && !menu->draw()) view_error = sh.quit = true;
                 if (test_menu_after && !view_error && (test_stage == 1 || test_stage == 3)) {
                     test_key(test_stage == 1 ? SDL_SCANCODE_F1 : SDL_SCANCODE_ESCAPE,
                              test_stage == 1 ? SDLK_F1 : SDLK_ESCAPE);
@@ -1185,7 +1366,10 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
         if (const auto* profile = std::getenv("ST_NATIVE_SMOKE_SCENE_PROFILE")) o.scene_profile = path_from_utf8(profile);
     }
     o.screen_features = launch.enhancements.mask();
+    o.audio = launch.audio;
     presentation.set_screen_layout(launch.layout, launch.automatic_join, launch.enhancements);
+    presentation.set_audio_settings(launch.audio);
+    presentation.set_pause_on_menu(launch.pause_on_menu);
     SDL_Window& window = *presentation.window();
 
     // Resize the existing window for the DS screens and put the launcher back at its previous size on Esc.

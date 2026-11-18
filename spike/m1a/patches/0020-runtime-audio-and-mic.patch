@@ -1,0 +1,134 @@
+Forward melonDS microphone hooks to Host and expose SPU audio interpolation.
+
+Connects Platform::Mic_Start, Mic_Stop and Mic_ReadInput through NDS userdata to
+Host callbacks without adding global state or platform audio dependencies to the
+engine. Also exposes melonDS SPU sample interpolation on RuntimeOptions and
+Runtime::set_audio_interpolation (applied at frame boundaries; default None).
+
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -45,6 +45,9 @@
+ // blends only in a band one pixel wide between them.
+ enum class TextureSmoothing { Off, Smooth, Sharp };
+ 
++// Optional SPU voice resampling filter (None matches original DS hardware).
++enum class AudioInterpolation { None, Linear, Cosine, Cubic, Gaussian };
++
+ struct VideoSettings {
+     Renderer renderer = Renderer::Software;
+     int scale = 1;                   // internal resolution multiplier for the GL renderers (1-16)
+@@ -98,6 +101,10 @@
+     virtual bool on_frame(const Frame& frame) = 0;
+     // Interleaved stereo samples at 48000 Hz produced during the last frame.
+     virtual void on_audio(const int16_t* samples, size_t frames) {}
++    // Signed 16-bit mono microphone samples (~47.6 kHz) pulled while the console samples the mic channel.
++    virtual void on_mic_start() {}
++    virtual void on_mic_stop() {}
++    virtual size_t on_mic_read(int16_t* samples, size_t max_samples) { (void)samples; (void)max_samples; return 0; }
+     virtual void on_save(const uint8_t* data, size_t size) {}
+     // The console's Wi-Fi settings changed (its three connections, 3 x 256 bytes of firmware): the game registered
+     // with the Wi-Fi Connection. Give them back in RuntimeOptions::wifi_settings to keep its user ID and friend code.
+@@ -136,6 +143,7 @@
+     // The GL renderers need a current OpenGL context (3.2 core, or 4.3 for Compute) with its functions loaded through
+     // melonDS's glad (gladLoadGLLoader) on the thread that calls run(). Without one they fall back to Software.
+     VideoSettings video;
++    AudioInterpolation audio_interpolation = AudioInterpolation::None;
+ };
+ 
+ class Runtime {
+@@ -162,6 +170,7 @@
+     // renderer that failed to start falls back to Software).
+     virtual void set_video(const VideoSettings& settings) = 0;
+     virtual VideoSettings video() const = 0;
++    virtual void set_audio_interpolation(AudioInterpolation interpolation) = 0;
+ 
+     // Speed-ups against the game's stalls. When an attack lands, the game loads and sets up data for a frame or two
+     // of ARM9 time, more than its 30 Hz tick leaves: the tick runs late and the picture hitches (on the DS as well).
+--- a/runtime/src/melon_platform.cpp
++++ b/runtime/src/melon_platform.cpp
+@@ -369,9 +369,16 @@
+ void Camera_Start(int, void*) {}
+ void Camera_Stop(int, void*) {}
+ void Camera_CaptureFrame(int, u32*, int, int, bool, void*) {}
+-void Mic_Start(void*) {}
+-void Mic_Stop(void*) {}
+-int Mic_ReadInput(s16*, int, void*) { return 0; }
++void Mic_Start(void* userdata) {
++    if (userdata) static_cast<ntr::RuntimeImpl*>(userdata)->host.on_mic_start();
++}
++void Mic_Stop(void* userdata) {
++    if (userdata) static_cast<ntr::RuntimeImpl*>(userdata)->host.on_mic_stop();
++}
++int Mic_ReadInput(s16* data, int maxlength, void* userdata) {
++    if (!userdata || !data || maxlength <= 0) return 0;
++    return int(static_cast<ntr::RuntimeImpl*>(userdata)->host.on_mic_read(data, size_t(maxlength)));
++}
+ AACDecoder* AAC_Init() { return nullptr; }
+ void AAC_DeInit(AACDecoder*) {}
+ bool AAC_Configure(AACDecoder*, int, int) { return false; }
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -2,6 +2,7 @@
+ #pragma once
+ 
+ #include <array>
++#include <atomic>
+ #include <chrono>
+ #include <cstdint>
+ #include <memory>
+@@ -64,6 +65,9 @@
+     bool is_overlay_resident(uint32_t id) override;
+     void set_video(const VideoSettings& settings) override;
+     VideoSettings video() const override { return video_; }
++    void set_audio_interpolation(AudioInterpolation interpolation) override {
++        pending_audio_interpolation_ = int(interpolation);
++    }
+     void set_fast_cart(bool on) override;
+     void set_cpu_speed(int multiplier) override { pending_cpu_speed_ = multiplier; }
+     unsigned render_between(double x) override;
+@@ -167,6 +171,7 @@
+     VideoSettings pending_video_;    // requested by set_video()
+     bool video_dirty_ = false;
+     bool video_applied_ = false;
++    std::atomic<int> pending_audio_interpolation_{-1};
+     int pending_cpu_speed_ = 0;  // requested by set_cpu_speed() (0 = no change)
+     void apply_cpu_speed(int multiplier);
+ 
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -84,6 +84,17 @@
+ 
+ static bool is_token(u32 pc) { return (pc & kFiberTokenMask) == kFiberTokenBase; }
+ 
++static melonDS::AudioInterpolation melon_audio_interpolation(AudioInterpolation interpolation) {
++    switch (interpolation) {
++    case AudioInterpolation::Linear: return melonDS::AudioInterpolation::Linear;
++    case AudioInterpolation::Cosine: return melonDS::AudioInterpolation::Cosine;
++    case AudioInterpolation::Cubic: return melonDS::AudioInterpolation::Cubic;
++    case AudioInterpolation::Gaussian: return melonDS::AudioInterpolation::SNESGaussian;
++    case AudioInterpolation::None:
++    default: return melonDS::AudioInterpolation::None;
++    }
++}
++
+ // ---------------------------------------------------------------------------------------------------------------
+ // Setup
+ 
+@@ -111,6 +122,7 @@
+     melonDS::NDSArgs args;
+     args.JIT = std::nullopt;
+     args.OutputSampleRate = 48000.0;
++    args.Interpolation = melon_audio_interpolation(options.audio_interpolation);
+     // Local wireless with other instances on this PC: each console needs a MAC address of its own (melonDS's scheme
+     // for its instances; the first instance keeps the default).
+     if (LocalWireless* w = LocalWireless::get(); w && w->slot() > 0) {
+@@ -472,6 +484,9 @@
+         video_dirty_ = false;
+         apply_video(pending_video_);
+     }
++    if (const int interp = pending_audio_interpolation_.exchange(-1); interp >= 0) {
++        n.SPU.SetInterpolation(melon_audio_interpolation(AudioInterpolation(interp)));
++    }
+     if (pending_cpu_speed_) {
+         apply_cpu_speed(pending_cpu_speed_);
+         pending_cpu_speed_ = 0;

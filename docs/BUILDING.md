@@ -95,8 +95,14 @@ the full top screen beside it. Portrait windows use the stacked arrangement in t
 both screens without a gap, **Side by side** gives both screens the same size, and **PiP overlay** places
 the top screen in the upper-right corner. The mouse starts touches only on the DS touch screen.
 
-The launcher groups these options into **Screens**, **Window** and **Game**. **Esc** and **F1** open the pause menu
-with **Screens** and **Window** tabs. **Presentation → Automatic (PC)** composes the narrated prologue's text over
+The launcher groups these options into **Screens**, **Screen features**, **Audio**, **Window** and **Game**. **Esc** and **F1** open the in-game overlay menu
+with **Screens**, **Screen features**, **Audio** and **Window** tabs without pausing the game by default, so layout and audio changes can be previewed live;
+use the **Pause game: Off / On** button in the menu header (or **Game → Pause on Esc / F1** in the launcher) to make **Esc** / **F1** pause gameplay and audio instead.
+**Audio** configures master volume (`0–100%`), muting while unfocused,
+SPU audio quality (`Original DS`, `Linear`, `Cosine`, `Cubic`, `Gaussian`), the playback output device, the microphone mode
+(`Automatic`, `Real mic`, `Virtual blow`, `Hybrid`, `Off`), the recording input device, and the microphone / virtual-blow level (`0–200%`),
+applying changes live during play. Physical microphones are opened only while the game samples the microphone channel ([ADR-0006](architecture/DECISIONS/0006-microphone.md)).
+**Presentation → Automatic (PC)** composes the narrated prologue's text over
 its art and renders the pre-title opening with a central
 camera fitted to the window aspect. The projection restores the scene area hidden between the DS screens and
 renders it as one continuous picture without stretching to widescreen. It returns to the selected layout at the title. **Original DS** keeps the
@@ -154,6 +160,7 @@ A window opens with both screens, top above bottom, and the console window shows
 | A / B / X / Y | X / Z / S / A | right / bottom / top / left face button |
 | L / R | Q / W | shoulder buttons |
 | Start / Select | Enter / Backspace | Start / Back |
+| Microphone (virtual blow) | Space or C (hold) | Right trigger or right stick click |
 | (program) fast forward, full screen | Tab (hold), F11 | — |
 
 The guide below starts from a new save, the first time you run the program. Every step was checked with the scripted

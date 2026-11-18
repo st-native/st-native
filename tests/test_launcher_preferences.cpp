@@ -13,26 +13,50 @@ int main() {
         { std::ofstream file(path); file << base << tail; }
         st::LauncherPreferences old(path);
         if (old.rom != "C:/source files/own dump.nds" || old.scale != "3" || old.language != "fr" ||
-            old.window != "fullscreen" || old.enhancements.mask() != 7) return 1;
+            old.window != "fullscreen" || old.enhancements.mask() != 7 || old.audio != st::AudioSettings{} ||
+            old.pause_on_menu) return 1;
         if (std::string_view(tail).find("manual") != std::string_view::npos && old.automatic_join) return 2;
     }
     for (unsigned mask = 0; mask < 8; ++mask) {
         st::LauncherPreferences original(path);
         original.layout = st::ScreenLayout::picture_in_picture;
         original.automatic_join = mask % 2 != 0;
+        original.pause_on_menu = (mask & 2) != 0;
         original.enhancements = {bool(mask & 1), bool(mask & 2), bool(mask & 4)};
+        original.audio = {
+            int(mask * 10),
+            (mask & 1) != 0,
+            st::AudioInterpolation::cubic,
+            "Headphones (USB Audio Device)",
+            st::MicMode::hybrid,
+            "Desk Microphone (2- USB Audio)",
+            145,
+        };
         if (!original.save(path)) return 3; // replacement must work on an already existing Windows file
         st::LauncherPreferences loaded(path);
         if (loaded.layout != original.layout || loaded.enhancements != original.enhancements ||
-            loaded.automatic_join != original.automatic_join || loaded.rom != original.rom) return 4;
+            loaded.automatic_join != original.automatic_join || loaded.rom != original.rom ||
+            loaded.audio != original.audio || loaded.pause_on_menu != original.pause_on_menu) return 4;
         for (auto feature : {st::ScreenFeature::cutscenes, st::ScreenFeature::subtitles, st::ScreenFeature::hide_secondary})
             if (st::screen_feature_enabled(loaded.enhancements.mask(), feature) != bool(mask & unsigned(feature))) return 5;
     }
-    for (const auto extension : {"screen-enhancements-v1 1 0", "screen-enhancements-v1 0 0 7", "future-format 0 0 0"}) {
+    for (const auto extension : {
+             "screen-enhancements-v1 1 0",
+             "screen-enhancements-v1 0 0 7",
+             "future-format 0 0 0",
+             "audio-v1 150 0 none automatic 100 \"\" \"\"",
+             "audio-v1 80 2 none automatic 100 \"\" \"\"",
+             "audio-v1 80 0 invalid automatic 100 \"\" \"\"",
+             "audio-v1 80 0 linear invalid 100 \"\" \"\"",
+             "audio-v1 80 0 linear real 250 \"\" \"\"",
+             "menu-v1",
+             "menu-v1 2",
+         }) {
         { std::ofstream file(path); file << base << "pip\nmanual\n" << extension; }
         st::LauncherPreferences damaged(path);
         if (damaged.automatic_join || damaged.enhancements.mask() != 7 ||
-            damaged.layout != st::ScreenLayout::picture_in_picture) return 6;
+            damaged.layout != st::ScreenLayout::picture_in_picture ||
+            damaged.audio != st::AudioSettings{} || damaged.pause_on_menu) return 6;
     }
     return 0;
 }
