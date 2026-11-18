@@ -37,6 +37,7 @@
 //     --frame-profile <csv>  numeric production/presentation/audio-queue diagnostics (no game data)
 //     --scene-profile <csv>  read-only display/projection diagnostics; --scene-stride 1 records every frame
 //     --layer-shots         with --shots, also write private foreground-plane checkpoints
+//     --screen-features <mask>  independent cutscene/subtitle/secondary-screen bits (1/2/4; default 7)
 //     --preview-tower-camera  headless research preview of the asymmetric Tower camera; touch adaptation pending
 //     --perf, --trace-threads, --trace-calls   the runtime's logs
 //   Script: one step per line, "#" starts a comment. Frames count from 1, the first frame shown.
@@ -115,6 +116,7 @@ struct Options {
          trace_calls = false, slow_cart = false, fullscreen = false, gx_check = false, preview_tower_camera = false,
          layer_shots = false;
     int scale = 2, cpu_speed = 4, scene_stride = 30;
+    uint32_t screen_features = st::ScreenEnhancements{}.mask();
     double cinematic_aspect = 0;
     uint64_t exit_after = 0;
     uint8_t language = 1;
@@ -254,6 +256,7 @@ struct Shared {
     uint64_t frame_number = 0, published_ns = 0;
     uint32_t frame_event = 0;
     std::atomic<double> cinematic_aspect{0};
+    std::atomic<uint32_t> screen_features{st::ScreenEnhancements{}.mask()};
     std::atomic<uint32_t> held{0}, pressed{0};
     std::atomic<int> touch_x{0}, touch_y{0};
     std::atomic<bool> touching{false}, fast{false}, quit{false}, done{false};
@@ -305,7 +308,11 @@ public:
                          (unsigned long long)f.state_hash, (unsigned long long)f.interp_steps,
                          (unsigned long long)f.ram_hash);
         if (!o_.control.empty() && !control(f)) return false;
-        const bool shared_scene = track_scene_ && screen_context_.update(*rt_, f, frame_);
+        const bool detected_scene = track_scene_ && screen_context_.update(*rt_, f, frame_);
+        const auto feature = screen_context_.narration() ? st::ScreenFeature::subtitles :
+            screen_context_.touch_only() ? st::ScreenFeature::hide_secondary : st::ScreenFeature::cutscenes;
+        const auto enabled_features = o_.headless ? o_.screen_features : sh_.screen_features.load();
+        const bool shared_scene = detected_scene && st::screen_feature_enabled(enabled_features, feature);
         if (scene_profile_ && (frame_ % o_.scene_stride == 0 || frame_ % o_.scene_stride == 1)) {
             const auto g = rt_->inspect_graphics();
             const auto& p = g.projection;
@@ -320,7 +327,8 @@ public:
             for (const auto v : g.reference_y) *scene_profile_ << ',' << v;
             for (const auto v : g.affine) *scene_profile_ << ',' << v;
             *scene_profile_ << ',' << g.focal_x << ',' << g.focal_y << ',' << g.offset_y << ','
-                << g.first_view_hash << ',' << shared_scene << ',';
+                << g.first_view_hash << ',' << shared_scene << ',' << enabled_features << ','
+                << int(screen_context_.scene()) << ',';
             bool first = true;
             for (const auto id : scene_overlay_ids_)
                 if (rt_->is_overlay_resident(id)) {
@@ -334,7 +342,8 @@ public:
         const auto camera_start = profile_ ? SDL_GetTicksNS() : 0;
         const uint32_t* cinematic = nullptr;
         if (shared_scene && aspect > 0) {
-            if (screen_context_.narration()) {
+            if (screen_context_.touch_only()) cinematic = f.bottom;
+            else if (screen_context_.narration()) {
                 if (st::compose_subtitles(narration_pixels_.data(), f.bottom, f.foreground_top,
                                          {screen_context_.narration_text_offset()}))
                     cinematic = narration_pixels_.data();
@@ -657,6 +666,13 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--frame-profile") o.frame_profile = next_path();
         else if (a == "--scene-profile") o.scene_profile = next_path();
         else if (a == "--layer-shots") o.layer_shots = true;
+        else if (a == "--screen-features") {
+            const auto text = next(); char* end = nullptr;
+            const auto value = std::strtol(text.c_str(), &end, 10);
+            if (text.empty() || *end || value < 0 || value > 7)
+                return std::fprintf(stderr, "--screen-features needs a mask from 0 to 7\n"), false;
+            o.screen_features = uint32_t(value);
+        }
         else if (a == "--preview-tower-camera") o.preview_tower_camera = true;
         else if (a == "--scene-stride") {
             const auto text = next(); char* end = nullptr;
@@ -797,7 +813,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         for (const char* name : {"reference_x", "reference_y"})
             for (int i = 0; i < 4; ++i) scene_profile << ',' << name << i;
         for (int i = 0; i < 16; ++i) scene_profile << ",affine" << i;
-        scene_profile << ",focal_x,focal_y,offset_y,first_view_hash,single_scene,overlays\n";
+        scene_profile << ",focal_x,focal_y,offset_y,first_view_hash,single_scene,screen_features,scene,overlays\n";
     }
     const SDL_InitFlags systems = o.headless ? 0 : SDL_INIT_AUDIO | SDL_INIT_GAMEPAD | (presentation ? 0 : SDL_INIT_VIDEO);
     if (!SDL_InitSubSystem(systems))
@@ -844,6 +860,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0 || !o.scene_profile.empty() || o.layer_shots;
 
     Shared sh;
+    sh.screen_features = o.screen_features;
     if (!o.headless) {
         const auto event = SDL_RegisterEvents(1);
         if (event != Uint32(-1)) sh.frame_event = event;
@@ -912,6 +929,12 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             host.name_keyboard.discard_pending();
             if (open && SDL_TextInputActive(window)) SDL_StopTextInput(window);
             host.pause_audio(open);
+            if (!open && presentation) {
+                sh.screen_features = presentation->screen_features();
+                sh.cinematic_aspect = presentation->cinematic_aspect();
+                std::lock_guard lock(sh.m);
+                sh.fresh = false; // discard a pre-pause frame composed with the former settings
+            }
             {
                 std::lock_guard lock(sh.pause_mutex);
                 sh.paused = open;
@@ -934,6 +957,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         while (!sh.done) {
             if (presentation) {
                 sh.cinematic_aspect = presentation->cinematic_aspect();
+                sh.screen_features = presentation->screen_features();
                 const bool edit_name = !menu_open && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) &&
                                        host.name_keyboard.active();
                 if (edit_name && !SDL_TextInputActive(window)) SDL_StartTextInput(window);
@@ -1106,7 +1130,8 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     game.join();
     if (o.cinematic_aspect > 0)
         std::printf("cinematic: %llu frames reframed\n", (unsigned long long)host.cinematic_frames());
-    if (!rc && (view_error || (test_menu_after && (test_stage != 4 || !saw_shared_scene || !saw_cinematic)))) rc = 1;
+    if (!rc && (view_error || (test_menu_after && (test_stage != 4 ||
+        (o.screen_features != 0 && (!saw_shared_scene || !saw_cinematic)))))) rc = 1;
     if (hashes) std::fclose(hashes);
     if (!o.record.empty()) {
         std::ofstream rec(o.record);
@@ -1159,7 +1184,8 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
         if (const auto* script = std::getenv("ST_NATIVE_SMOKE_SCRIPT")) o.script = path_from_utf8(script);
         if (const auto* profile = std::getenv("ST_NATIVE_SMOKE_SCENE_PROFILE")) o.scene_profile = path_from_utf8(profile);
     }
-    presentation.set_screen_layout(launch.layout, launch.automatic_join);
+    o.screen_features = launch.enhancements.mask();
+    presentation.set_screen_layout(launch.layout, launch.automatic_join, launch.enhancements);
     SDL_Window& window = *presentation.window();
 
     // Resize the existing window for the DS screens and put the launcher back at its previous size on Esc.

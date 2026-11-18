@@ -34,6 +34,8 @@ if(FFCC_BUILD_TESTS)
   add_test(NAME st_screen_context COMMAND st_screen_context_tests)
   add_executable(st_subtitle_composition_tests "${ST_ROOT}/tests/test_subtitle_composition.cpp")
   add_test(NAME st_subtitle_composition COMMAND st_subtitle_composition_tests)
+  add_executable(st_launcher_preferences_tests "${ST_ROOT}/tests/test_launcher_preferences.cpp")
+  add_test(NAME st_launcher_preferences COMMAND st_launcher_preferences_tests)
 endif()
 
 # Source-checkout launcher for the Windows developer alpha. Reuse the engine's pinned RmlUi/GL3 backend.

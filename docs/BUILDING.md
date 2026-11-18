@@ -228,6 +228,10 @@ Compare the pictures in `build\boot1\` with the steps in the script's comments.
 
 ### Frame pacing diagnostics
 
+The launcher and Esc/F1 pause menu expose independent options under **Screen features**: unified cutscenes,
+subtitles over artwork, and hiding the decorative secondary screen in verified save/setup menus. The switches are
+saved across launches. See [Dual-screen UX](design/DUAL_SCREEN_UX.md#independent-screen-features-2026-11-18).
+
 For local graphics-context surveys with advanced saves, see
 [Continuous dual-screen scene survey](design/DUAL_SCREEN_VALIDATION.md). `--scene-profile <local.csv>` records
 numeric graphics metadata; `--scene-stride 1` samples every frame. Keep saves and output below ignored `build/`.

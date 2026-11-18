@@ -35,7 +35,12 @@ public:
         signals.narration_overlays = !signals.opening_overlays && !signals.cole_overlays &&
             !signals.tower_overlays && !frame.display_capture && runtime.is_overlay_resident(31) &&
             runtime.is_overlay_resident(62) && runtime.is_overlay_resident(102);
-        if (signals.narration_overlays) signals.graphics = runtime.inspect_graphics(false);
+        // File-selection through Adventure choice: overlay 19/101 and these SDK display states were
+        // recorded in blank-save and existing-save replays. No pixel/brightness-based emptiness test.
+        signals.menu_overlays = !signals.opening_overlays && !signals.cole_overlays && !signals.tower_overlays &&
+            !frame.display_capture && runtime.is_overlay_resident(19) &&
+            runtime.is_overlay_resident(101);
+        if (signals.menu_overlays || signals.narration_overlays) signals.graphics = runtime.inspect_graphics(false);
         return policy_.update(signals);
     }
 
@@ -46,6 +51,7 @@ public:
     CinematicScene scene() const { return policy_.scene(); }
     ntr::CinematicCamera camera() const { return policy_.camera(); }
     bool narration() const { return policy_.scene() == CinematicScene::prologue; }
+    bool touch_only() const { return policy_.scene() == CinematicScene::save_menu; }
     int narration_text_offset() const { return prologue_text_offset_y; }
 
 private:

@@ -45,6 +45,54 @@ it has no logo-specific positions or game IDs.
 same symmetric camera with full-size UI; other interactive scene rules remain Proposed. See the
 [scene validation list](GAMEPLAY_INTERACTION_MATRIX.md#scenes-to-check-with-the-desktop-layouts).
 
+### Independent screen features (2026-11-18)
+
+**Implemented:** the launcher and Esc/F1 pause menu have a **Screen features** tab with three independent switches:
+
+| Control | Effect when enabled | Effect when disabled |
+|---|---|---|
+| Unified cutscenes | Extra camera for the verified opening/Cole intervals. | Both original screens use the selected layout. |
+| Subtitles over artwork | Prologue artwork and original narration composed together. | Original art/text screens use the selected layout. |
+| Hide unused screens | Original Touch Screen alone in verified file-selection, file setup and Adventure/mode menus. | The decorative secondary screen remains in the selected layout, including PiP. |
+
+All three default to On. **Presentation → Original DS** suspends automatic presentation and disables these controls
+without forgetting their saved choices. F2 remains a temporary original-view override. Each switch applies on resume
+and is saved for the next launch. Changing one does not change the other two.
+
+The selected two-screen layout remains the fallback for gameplay and unknown contexts. Hiding is based on a verified
+menu state, not screen brightness or an assumption that a map is useless. No generic blank-screen detector is used.
+The menu rule requires overlay probes 19/101, no capture/swap, engine A display control `0x211c10` or `0x211f10`, and
+engine B `0x211f30` (USA/Australia revision 0, blank/existing-save replays). It releases when those states leave.
+The extra image is the unmodified original Touch Screen, so all buttons retain identity touch coordinates. Battle,
+Tag Mode and later in-game menus have not been individually validated; this is not a claim to hide every unneeded
+screen throughout the game.
+
+The application passes a single options snapshot from the window thread to the producer through an atomic mask.
+On resume it publishes the new options before waking the producer and discards any old queued presentation frame.
+The game/context reader does not own user settings; the engine is unchanged. Developer replays use
+`--screen-features <mask>`: cutscenes=1, subtitles=2, hide-secondary=4, default=7. `--scene-profile` logs the mask and
+detected scene separately from whether its feature was selected.
+
+Preferences retain the previous quoted ROM path, scale, language, window, layout and master-mode fields. A versioned
+`screen-enhancements-v1` suffix adds the three switches. Older files keep their existing master mode/layout; invalid
+or unknown suffixes use default switches. ROM-free tests cover all eight combinations, save/reload/replacement,
+legacy formats, malformed extensions and RmlUi change events in both menus.
+
+**Verified locally:** Windows build and all 16 C++/UI tests pass. The launcher smoke test exercises all eight
+combinations through launcher and pause controls, checks master-mode disabling and synchronization, and verifies
+wide/compact/scrollable layouts. Python reports 12 tests, one skipped, no failures.
+
+The all-off/all-on replays match every state/RAM hash across 17,400 frames, with 15/15 original screen checkpoints
+unchanged and 6,657 geometry checks reporting zero differences. Three 6,200-frame runs enabling only cutscenes,
+only subtitles or only hiding also match the reference hashes and select only their own contexts. Menu-only views
+are byte-identical to the original Touch Screen at the handedness/setup/mode checkpoints.
+
+An existing-save replay compares 3,000 frames off/on: all hashes and 6/6 original-screen checkpoints agree, and the
+gameplay map remains in the fallback layout after loading. A real-window PiP-origin menu-only smoke test exits
+successfully, displaying the single menu canvas, opening/closing Esc/F1 settings, switching to original screens for
+30 presented frames with F2, and returning to the menu canvas. These concurrent correctness tests are not frame
+pacing benchmarks. Other platforms and remote CI were not run for this change.
+
 ### Reusing the cinematic camera
 
 The [local scene survey](DUAL_SCREEN_VALIDATION.md) now includes community checkpoints for Cole and the Tower.

@@ -83,5 +83,20 @@ int main() {
     if (policy.update(narration)) return 32;
     narration.capture = false; narration.graphics.screen_swap = true;
     if (policy.update(narration)) return 33;
+    st::ScreenSignals menu;
+    menu.menu_overlays = true;
+    menu.graphics.display_control = {0x211c10, 0x211f30};
+    if (!policy.update(menu) || policy.scene() != st::CinematicScene::save_menu) return 34;
+    menu.graphics.display_control[0] = 0x211f10;
+    if (!policy.update(menu)) return 35;
+    menu.capture = true;
+    if (policy.update(menu)) return 36;
+    menu.capture = false; menu.graphics.screen_swap = true;
+    if (policy.update(menu)) return 37;
+    menu.graphics.screen_swap = false; menu.menu_overlays = false;
+    if (policy.update(menu)) return 38;
+    menu.menu_overlays = true; menu.graphics.display_control[1] ^= 1;
+    if (policy.update(menu)) return 39;
+    if (policy.update({})) return 40;
     return 0;
 }

@@ -81,8 +81,9 @@ h2 { font-size: 23dp; line-height: 28dp; }
 #status.error { color: #ffbfaa; }
 
 .field { display: flex; align-items: center; justify-content: space-between; margin-top: 13dp; }
-.settings-tabs { display: flex; margin-top: 10dp; }
-.settings-tabs input[type=submit] { flex: 1; min-width: 0; height: 34dp; line-height: 32dp; margin-right: 5dp; }
+.settings-tabs { display: flex; flex-wrap: wrap; margin-top: 10dp; }
+.settings-tabs input[type=submit] { flex: 1 1 40%; min-width: 0; height: 34dp; line-height: 32dp; margin-right: 5dp; margin-bottom: 5dp; }
+#settings-features select { flex-basis: 72dp; }
 .settings-tabs input[type=submit].selected { border-color: #aabda6; background-color: #41584d; }
 .settings-page { display: none; min-height: 96dp; }
 .settings-page.selected { display: block; }

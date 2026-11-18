@@ -25,6 +25,7 @@
           <h2 id="settings-heading">Settings</h2>
           <div class="settings-tabs">
             <input type="submit" id="tab-screens" class="selected" value="Screens" />
+            <input type="submit" id="tab-features" value="Screen features" />
             <input type="submit" id="tab-window" value="Window" />
             <input type="submit" id="tab-game" value="Game" />
           </div>
@@ -62,6 +63,20 @@
               <option value="manual">Original DS</option>
             </select>
           </div>
+          </div>
+          <div id="settings-features" class="settings-page">
+            <div class="field">
+              <label for="unify-cutscenes">Unified cutscenes</label>
+              <select id="unify-cutscenes"><option value="on">On</option><option value="off">Off</option></select>
+            </div>
+            <div class="field">
+              <label for="narrative-subtitles">Subtitles over artwork</label>
+              <select id="narrative-subtitles"><option value="on">On</option><option value="off">Off</option></select>
+            </div>
+            <div class="field">
+              <label for="hide-secondary">Hide unused screens</label>
+              <select id="hide-secondary"><option value="on">On</option><option value="off">Off</option></select>
+            </div>
           </div>
           <div id="settings-game" class="settings-page">
           <div class="field">

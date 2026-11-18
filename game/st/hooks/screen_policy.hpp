@@ -6,12 +6,13 @@
 
 namespace st {
 
-enum class CinematicScene { none, opening, cole, tower, prologue };
+enum class CinematicScene { none, opening, cole, tower, prologue, save_menu };
 
 struct ScreenSignals {
     uint64_t frame = 0;
     bool capture = false, opening_overlays = false, cole_overlays = false, tower_overlays = false;
     bool narration_overlays = false;
+    bool menu_overlays = false;
     ntr::GraphicsContext graphics;
 };
 
@@ -30,6 +31,14 @@ public:
         scene_ = CinematicScene::none;
         const auto& g = s.graphics;
         const auto& p = g.projection;
+        // File selection/setup/mode menu, locally replayed in USA rev. 0. The top screen is decorative.
+        if (s.menu_overlays && !s.capture && !g.screen_swap &&
+            (g.display_control[0] == 0x211c10 || g.display_control[0] == 0x211f10) &&
+            g.display_control[1] == 0x211f30) {
+            scene_ = CinematicScene::save_menu;
+            previous_ = {}; previous_scene_ = CinematicScene::none;
+            return true;
+        }
         // USA/Australia rev. 0 prologue: observed SDK display state, not pixel brightness/content.
         // Window 0 becoming enabled in engine A (0x13118) releases this rule before the first dialogue.
         if (s.narration_overlays && !s.capture && !g.screen_swap &&

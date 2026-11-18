@@ -26,6 +26,7 @@
 #include "../present/launcher_window.hpp"
 #include "../present/cursor_interface.hpp"
 #include "../setup/launcher_worker.hpp"
+#include "../settings/launcher_preferences.hpp"
 
 namespace fs = std::filesystem;
 
@@ -34,28 +35,37 @@ namespace {
 constexpr const char* kTitle = "Spirit Tracks Native";
 constexpr int kWidth = 800, kHeight = 610;
 
-constexpr std::array kLayoutOptions{
-    std::pair{st::ScreenLayout::focus, "focus"},
-    std::pair{st::ScreenLayout::classic, "classic"},
-    std::pair{st::ScreenLayout::side_by_side, "side-by-side"},
-    std::pair{st::ScreenLayout::picture_in_picture, "pip"},
-};
+using st::kLayoutOptions;
+using st::parse_screen_layout;
+using st::layout_value;
+using Preferences = st::LauncherPreferences;
 
-st::ScreenLayout parse_screen_layout(std::string_view value) {
-    for (const auto& [layout, key] : kLayoutOptions)
-        if (value == key) return layout;
-    return st::ScreenLayout::focus;
+constexpr std::array kEnhancementIds{"unify-cutscenes", "narrative-subtitles", "hide-secondary"};
+
+st::ScreenEnhancements read_enhancements(Rml::ElementDocument& document) {
+    auto on = [&](const char* id) {
+        return static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).GetValue() != "off";
+    };
+    return {on(kEnhancementIds[0]), on(kEnhancementIds[1]), on(kEnhancementIds[2])};
 }
 
-const char* layout_value(st::ScreenLayout layout) {
-    for (const auto& [choice, key] : kLayoutOptions)
-        if (choice == layout) return key;
-    return "focus";
+void show_enhancements(Rml::ElementDocument& document, st::ScreenEnhancements settings) {
+    const std::array values{settings.cutscenes, settings.subtitles, settings.hide_secondary};
+    for (size_t i = 0; i < values.size(); ++i) {
+        auto& control = static_cast<Rml::ElementFormControl&>(*document.GetElementById(kEnhancementIds[i]));
+        const char* value = values[i] ? "on" : "off";
+        if (control.GetValue() != value) control.SetValue(value);
+    }
+}
+
+void enable_enhancements(Rml::ElementDocument& document, bool enabled) {
+    for (const auto* id : kEnhancementIds)
+        static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).SetDisabled(!enabled);
 }
 
 bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) {
     if (!id.starts_with("tab-") || !document.GetElementById(id)) return false;
-    for (const std::string key : {"screens", "window", "game"}) {
+    for (const std::string key : {"screens", "features", "window", "game"}) {
         auto* tab = document.GetElementById("tab-" + key);
         if (!tab) continue;
         const bool selected = id == tab->GetId();
@@ -64,38 +74,6 @@ bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) 
     }
     return true;
 }
-
-struct Preferences {
-    // Quoted UTF-8 lets a picker path contain spaces without changing its spelling.
-    std::string rom, scale = "2", language = "en", window = "windowed";
-    st::ScreenLayout layout = st::ScreenLayout::focus;
-    bool automatic_join = true;
-
-    explicit Preferences(const fs::path& path) {
-        std::ifstream file(path, std::ios::binary);
-        file >> std::quoted(rom) >> scale >> language >> window;
-        std::string layout_key;
-        if (file >> layout_key) layout = parse_screen_layout(layout_key);
-        std::string join_key;
-        if (file >> join_key) automatic_join = join_key != "manual";
-        if (scale != "1" && scale != "2" && scale != "3") scale = "2";
-        if (language != "en" && language != "fr" && language != "es") language = "en";
-        if (window != "fullscreen") window = "windowed";
-    }
-
-    bool save(const fs::path& path) const {
-        fs::path temp = path;
-        temp += ".tmp";
-        std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-        file << std::quoted(rom) << '\n' << scale << '\n' << language << '\n' << window << '\n'
-             << layout_value(layout) << '\n' << (automatic_join ? "automatic" : "manual") << '\n';
-        file.close();
-        if (!file) return false;
-        std::error_code error;
-        fs::rename(temp, path, error);
-        return !error;
-    }
-};
 
 class Launcher final : public Rml::EventListener {
     enum class Action { inspect, verify, play, rebuild, remove };
@@ -109,6 +87,7 @@ public:
         control("window-mode").SetValue(prefs_.window);
         control("screen-layout").SetValue(layout_value(prefs_.layout));
         control("auto-join").SetValue(prefs_.automatic_join ? "automatic" : "manual");
+        show_enhancements(document_, prefs_.enhancements);
         document_.AddEventListener(Rml::EventId::Click, this);
         document_.AddEventListener(Rml::EventId::Change, this);
         update_rom_label();
@@ -129,7 +108,9 @@ public:
             prefs_.window = control("window-mode").GetValue();
             prefs_.layout = parse_screen_layout(control("screen-layout").GetValue());
             prefs_.automatic_join = control("auto-join").GetValue() != "manual";
+            prefs_.enhancements = read_enhancements(document_);
             persist();
+            update_buttons();
             return;
         }
         auto* target = event.GetTargetElement();
@@ -197,7 +178,7 @@ public:
             const uint8_t language = prefs_.language == "fr" ? 2 : prefs_.language == "es" ? 5 : 1;
             ready_ = st::GameLaunch{path_from_utf8(prefs_.rom), module, language,
                                     prefs_.scale[0] - '0', prefs_.window == "fullscreen", prefs_.layout,
-                                    prefs_.automatic_join};
+                                    prefs_.automatic_join, prefs_.enhancements};
         } else if (action_ == Action::play && result == 0) {
             show_status("Preparation did not return a game module.", true);
         }
@@ -212,12 +193,16 @@ public:
     }
     st::ScreenLayout screen_layout() const { return prefs_.layout; }
     bool automatic_join() const { return prefs_.automatic_join; }
-    void save_screen_settings(st::ScreenLayout layout, bool automatic_join) {
+    st::ScreenEnhancements screen_enhancements() const { return prefs_.enhancements; }
+    void save_screen_settings(st::ScreenLayout layout, bool automatic_join, st::ScreenEnhancements enhancements) {
         control("screen-layout").SetValue(layout_value(layout));
         control("auto-join").SetValue(automatic_join ? "automatic" : "manual");
+        show_enhancements(document_, enhancements);
         prefs_.layout = layout;
         prefs_.automatic_join = automatic_join;
+        prefs_.enhancements = enhancements;
         persist();
+        update_buttons();
     }
     std::optional<st::GameLaunch> take_launch() { return std::exchange(ready_, std::nullopt); }
 
@@ -288,6 +273,7 @@ private:
         control("open-log").SetDisabled(run_log_.empty());
         for (const auto id : {"scale", "language", "window-mode", "screen-layout", "auto-join"})
             control(id).SetDisabled(busy());
+        enable_enhancements(document_, !busy() && prefs_.automatic_join);
     }
 
     void show_steps(bool show) {
@@ -463,6 +449,8 @@ public:
         update_display_button();
         control("pause-screen-layout").SetValue(layout_value(launcher_.screen_layout()));
         control("auto-join").SetValue(launcher_.automatic_join() ? "automatic" : "manual");
+        show_enhancements(document_, launcher_.screen_enhancements());
+        enable_enhancements(document_, launcher_.automatic_join());
         document_.Show();
         document_.GetElementById("resume")->Focus();
     }
@@ -487,9 +475,12 @@ private:
             if (document_.IsVisible()) {
                 const auto layout = parse_screen_layout(control("pause-screen-layout").GetValue());
                 const bool automatic_join = control("auto-join").GetValue() != "manual";
-                if (layout != launcher_.screen_layout() || automatic_join != launcher_.automatic_join()) {
-                    window_.set_screen_layout(layout, automatic_join);
-                    launcher_.save_screen_settings(layout, automatic_join);
+                const auto enhancements = read_enhancements(document_);
+                enable_enhancements(document_, automatic_join);
+                if (layout != launcher_.screen_layout() || automatic_join != launcher_.automatic_join() ||
+                    enhancements != launcher_.screen_enhancements()) {
+                    window_.set_screen_layout(layout, automatic_join, enhancements);
+                    launcher_.save_screen_settings(layout, automatic_join, enhancements);
                 }
             }
             return;
@@ -532,7 +523,8 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
         return Rect{start.x, start.y, start.x + size.x, start.y + size.y};
     };
     constexpr std::array ids{"mark", "game-heading", "rom", "browse", "status", "play", "settings-heading",
-                             "tab-screens", "tab-window", "tab-game",
+                             "tab-screens", "tab-features", "tab-window", "tab-game",
+                             "unify-cutscenes", "narrative-subtitles", "hide-secondary",
                              "window-mode", "screen-layout", "auto-join", "scale", "language", "cache-summary", "rebuild", "remove-cache",
                              "toggle-steps", "open-log"};
     std::array<Rect, ids.size()> controls{};
@@ -623,8 +615,15 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
             if (const char* count = std::getenv("ST_NATIVE_SMOKE_FRAMES"))
                 smoke_frames = std::clamp<uint64_t>(std::strtoull(count, nullptr, 10), 180, 36000);
             if (std::getenv("ST_NATIVE_SMOKE_ORIGINAL")) game->automatic_join = false;
+            if (const char* text = std::getenv("ST_NATIVE_SMOKE_FEATURES")) {
+                char* end = nullptr;
+                const auto mask = std::strtol(text, &end, 10);
+                if (end == text || *end || mask < 0 || mask > 7) return 8;
+                game->enhancements = {bool(mask & 1), bool(mask & 2), bool(mask & 4)};
+            }
             game->layout = layout;
             game->fullscreen = layout == st::ScreenLayout::classic || layout == st::ScreenLayout::picture_in_picture;
+            launcher.save_screen_settings(game->layout, game->automatic_join, game->enhancements);
             document->Hide();
             const auto result = st::play_game_in_window(*game, window, pause, smoke_frames);
             document->Show();
@@ -640,12 +639,25 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
             return 2;
         if (!check_layout(window, *context, *document, 1040, 610, false, false, {})) return 4;
         for (const auto& [tab, field] : {std::pair{"tab-window", "window-mode"}, std::pair{"tab-game", "language"},
+                                         std::pair{"tab-features", "unify-cutscenes"},
                                          std::pair{"tab-screens", "screen-layout"}}) {
             document->GetElementById(tab)->DispatchEvent(Rml::EventId::Click, {});
             if (!window.draw(*context) || !document->GetElementById(field)->IsVisible(true)) return 11;
         }
         if (!check_layout(window, *context, *document, 420, 780, true, false, preview("launcher-compact.bmp"))) return 5;
         if (!check_layout(window, *context, *document, 390, 300, true, true, {})) return 6;
+        document->GetElementById("tab-features")->DispatchEvent(Rml::EventId::Click, {});
+        if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("features-wide.bmp")) ||
+            !check_layout(window, *context, *document, 390, 300, true, true, preview("features-short.bmp"))) return 13;
+        for (unsigned mask = 0; mask < 8; ++mask) {
+            show_enhancements(*document, {bool(mask & 1), bool(mask & 2), bool(mask & 4)});
+            if (launcher.screen_enhancements().mask() != mask) return 14;
+        }
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("auto-join")).SetValue("manual");
+        for (const auto* id : kEnhancementIds)
+            if (!static_cast<Rml::ElementFormControl&>(*document->GetElementById(id)).IsDisabled()) return 14;
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("auto-join")).SetValue("automatic");
+        document->GetElementById("tab-screens")->DispatchEvent(Rml::EventId::Click, {});
         auto* toggle_steps = document->GetElementById("toggle-steps");
         auto* details = document->GetElementById("build-details");
         toggle_steps->DispatchEvent(Rml::EventId::Click, {});
@@ -669,6 +681,13 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         std::fill(tiles.begin() + st::ds_width * st::ds_screen_height, tiles.end(), 0xff66845c);
         document->Hide();
         pause.open();
+        pause_document->GetElementById("tab-features")->DispatchEvent(Rml::EventId::Click, {});
+        for (unsigned mask = 0; mask < 8; ++mask) {
+            show_enhancements(*pause_document, {bool(mask & 1), bool(mask & 2), bool(mask & 4)});
+            if (window.screen_features() != mask || launcher.screen_enhancements().mask() != mask ||
+                read_enhancements(*document).mask() != mask || !pause.draw()) return 14;
+        }
+        pause_document->GetElementById("tab-screens")->DispatchEvent(Rml::EventId::Click, {});
         for (const auto& [layout, key] : kLayoutOptions) {
             layout_control.SetValue(key);
             if (launcher.screen_layout() != layout || !window.present_game(tiles.data(), false, false, false) ||

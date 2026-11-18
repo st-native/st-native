@@ -43,6 +43,7 @@ struct LauncherWindow::State {
     GLuint game_texture = 0;
     st::ScreenLayout layout = st::ScreenLayout::focus;
     bool automatic_join = true, shared_scene = false, classic_override = false, cinematic = false;
+    st::ScreenEnhancements enhancements;
 
     bool show_cinematic() const { return cinematic && shared_scene && (automatic_join != classic_override); }
 
@@ -243,9 +244,10 @@ bool LauncherWindow::game_coordinates(float& x, float& y, bool captured) const {
     return st::to_touch(state_->views(pixels_w, pixels_h), x, y, captured);
 }
 
-void LauncherWindow::set_screen_layout(st::ScreenLayout layout, bool automatic_join) {
+void LauncherWindow::set_screen_layout(st::ScreenLayout layout, bool automatic_join, st::ScreenEnhancements enhancements) {
     state_->layout = layout;
     state_->automatic_join = automatic_join;
+    state_->enhancements = enhancements;
     state_->classic_override = false;
 }
 
@@ -260,3 +262,5 @@ double LauncherWindow::cinematic_aspect() const {
     const auto view = st::cinematic_view(width, height);
     return view.width > 0 && view.height > 0 ? double(view.width) / view.height : 0;
 }
+
+uint32_t LauncherWindow::screen_features() const { return state_->enhancements.mask(); }

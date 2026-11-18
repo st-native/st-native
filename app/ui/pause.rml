@@ -10,6 +10,7 @@
     #classic-shortcut { color: #b3c0b8; font-size: 15dp; }
     #pause-panel > input { width: 100%; }
     #pause-panel .settings-page { min-height: 92dp; }
+    #pause-panel .settings-tabs input { flex: 1; margin-bottom: 0; }
     #display-row, #layout-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10dp; }
     #display-row input { width: 112dp; }
     #resume { background-color: #c7dbb9; border-color: #c7dbb9; color: #18231d; margin-bottom: 8dp; }
@@ -25,6 +26,7 @@
     </div>
     <div class="settings-tabs">
       <input type="submit" id="tab-screens" class="selected" value="Screens" />
+      <input type="submit" id="tab-features" value="Screen features" />
       <input type="submit" id="tab-window" value="Window" />
     </div>
     <div id="settings-screens" class="settings-page selected">
@@ -43,6 +45,20 @@
           <option value="automatic">Automatic (PC)</option>
           <option value="manual">Original DS</option>
         </select>
+      </div>
+    </div>
+    <div id="settings-features" class="settings-page">
+      <div class="field">
+        <label for="unify-cutscenes">Unified cutscenes</label>
+        <select id="unify-cutscenes"><option value="on">On</option><option value="off">Off</option></select>
+      </div>
+      <div class="field">
+        <label for="narrative-subtitles">Subtitles over artwork</label>
+        <select id="narrative-subtitles"><option value="on">On</option><option value="off">Off</option></select>
+      </div>
+      <div class="field">
+        <label for="hide-secondary">Hide unused screens</label>
+        <select id="hide-secondary"><option value="on">On</option><option value="off">Off</option></select>
       </div>
     </div>
     <div id="settings-window" class="settings-page">

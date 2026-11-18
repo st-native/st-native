@@ -8,6 +8,10 @@ Date: 2026-11-18. Scope: the USA/Australia revision 0 new-game prologue, Windows
 canvas. The art comes from the original Touch Screen. Its pixels keep their positions; the narration comes from
 the transparent foreground of the original top screen, translated toward the lower part of the art. A translucent
 black band improves contrast. An empty foreground produces only the art, without an empty caption panel.
+**Screen features → Subtitles over artwork** controls this composition independently of cutscene cameras and
+secondary-screen hiding. Turning it off restores the selected two-screen layout for this prologue.
+See [independent screen features](DUAL_SCREEN_UX.md#independent-screen-features-2026-11-18) for the shared settings,
+preference migration and option-isolation checks.
 
 The compositor uses the game's actual glyph pixels, spacing, colors, fades and typewriter progress. No text is
 transcribed, recognized or replaced. Long foregrounds fit inside the canvas rather than being clipped. The current

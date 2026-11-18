@@ -6,6 +6,7 @@
 #include <string>
 
 #include "present/screen_layout.hpp"
+#include "present/screen_enhancements.hpp"
 
 struct SDL_Window;
 union SDL_Event;
@@ -19,6 +20,7 @@ struct GameLaunch {
     bool fullscreen = false;
     ScreenLayout layout = ScreenLayout::focus;
     bool automatic_join = true;
+    ScreenEnhancements enhancements;
 };
 
 struct GameResult {
@@ -33,8 +35,9 @@ public:
     // Three 256x192 BGRA planes: original top, original touch, and the optional cinematic view.
     virtual bool present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) = 0;
     virtual double cinematic_aspect() const = 0;
+    virtual uint32_t screen_features() const = 0;
     virtual bool game_coordinates(float& x, float& y, bool captured) const = 0;
-    virtual void set_screen_layout(ScreenLayout layout, bool automatic_join) = 0;
+    virtual void set_screen_layout(ScreenLayout layout, bool automatic_join, ScreenEnhancements enhancements = {}) = 0;
     virtual void toggle_classic_layout() = 0;
 };
 
