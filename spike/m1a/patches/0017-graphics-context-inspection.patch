@@ -1,0 +1,205 @@
+Expose read-only hardware and projection summaries for scene validation.
+
+The diagnostic API returns SDK register values and aggregate projection counts,
+never pixels, textures, code, command streams or game-specific overlay rules.
+
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -3,6 +3,7 @@
+ #pragma once
+ 
+ #include "ntr/cinematic.hpp"
++#include "ntr/graphics_context.hpp"
+ #include <array>
+ #include <cstddef>
+ #include <cstdint>
+@@ -173,6 +174,8 @@
+     // valid until the next call, or null when the recorded scene cannot be reframed. `ui` places only its
+     // screen-space 3D overlay; the camera and original screens are not affected by that placement.
+     virtual const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}) = 0;
++    // Game-thread-only read-only hardware/projection diagnostics; never returns pixels or commands.
++    virtual GraphicsContext inspect_graphics() const = 0;
+ };
+ 
+ // The message of the last fatal error ("" if there was none). A crash report quotes it: the log may not have it yet.
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -68,6 +68,7 @@
+     void set_cpu_speed(int multiplier) override { pending_cpu_speed_ = multiplier; }
+     unsigned render_between(double x) override;
+     const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}) override;
++    GraphicsContext inspect_graphics() const override;
+     static void capture_overlay_line(void* context, const melonDS::GPU2D& engine, u32 line,
+                                       const u32* foreground, const u32* composite);
+ 
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -683,6 +683,32 @@
+ 
+ // ---------------------------------------------------------------------------------------------------------------
+ // Calls
++
++GraphicsContext RuntimeImpl::inspect_graphics() const {
++    GraphicsContext result = gx_ ? gx_->graphics_context() : GraphicsContext{};
++    const auto& gpu = nds->GPU;
++    result.screen_swap = gpu.ScreenSwap;
++    result.capture_control = gpu.CaptureCnt;
++    for (unsigned e = 0; e < 2; ++e) {
++        const auto& display = e == 0 ? gpu.GPU2D_A : gpu.GPU2D_B;
++        result.display_control[e] = display.DispCnt;
++        for (unsigned bg = 0; bg < 4; ++bg) {
++            result.bg_control[e * 4 + bg] = display.BGCnt[bg];
++            result.scroll_x[e * 4 + bg] = display.BGXPos[bg];
++            result.scroll_y[e * 4 + bg] = display.BGYPos[bg];
++        }
++        for (unsigned bg = 0; bg < 2; ++bg) {
++            const auto index = e * 2 + bg;
++            result.reference_x[index] = display.BGXRef[bg];
++            result.reference_y[index] = display.BGYRef[bg];
++            result.affine[index * 4] = display.BGRotA[bg];
++            result.affine[index * 4 + 1] = display.BGRotB[bg];
++            result.affine[index * 4 + 2] = display.BGRotC[bg];
++            result.affine[index * 4 + 3] = display.BGRotD[bg];
++        }
++    }
++    return result;
++}
+ 
+ const uint32_t* RuntimeImpl::render_cinematic(double aspect, CinematicUiPlacement ui) {
+     if (!gx_ || !options.cinematic_camera) return nullptr;
+--- a/runtime/src/gx_stream.hpp
++++ b/runtime/src/gx_stream.hpp
+@@ -12,6 +12,7 @@
+ 
+ #include "GPU3D.h"
+ #include "gx_match.hpp"
++#include "gx_inspect.hpp"
+ 
+ namespace ntr::gx {
+ 
+@@ -19,6 +20,10 @@
+     std::vector<Entry> entries;    // up to and including the flush (0x50)
+     std::vector<uint8_t> start;    // the geometry engine's state when its first command ran (see save_state)
+     uint32_t num_vertices = 0, num_polygons = 0;  // what it built
++    mutable ProjectionSummary projection;
++    mutable bool inspected = false;
++    int32_t focal_x = 0, focal_y = 0, offset_y = 0;
++    uint64_t first_view_hash = 0;
+     uint64_t vblank = 0;           // the VBlank that swapped it in
+ };
+ 
+@@ -43,6 +48,20 @@
+     // list back. Returns what `render` returned, or 0 when there is nothing to blend (the emulated frame is current).
+     uint32_t render_between(double x, const std::function<uint32_t()>& render);
+     bool render_cinematic(double aspect, const std::function<void(bool overlay)>& render);
++    GraphicsContext graphics_context() const {
++        GraphicsContext result;
++        if (have_prev_) {
++            if (!prev_.inspected) {
++                prev_.projection = inspect_projections(prev_.entries);
++                prev_.inspected = true;
++            }
++            result.geometry_frame = prev_.vblank;
++            result.projection = prev_.projection;
++            result.focal_x = prev_.focal_x; result.focal_y = prev_.focal_y; result.offset_y = prev_.offset_y;
++            result.first_view_hash = prev_.first_view_hash;
++        }
++        return result;
++    }
+ 
+     // Logs the statistics every 60 frames.
+     void report(uint64_t frame);
+--- a/runtime/src/gx_stream.cpp
++++ b/runtime/src/gx_stream.cpp
+@@ -9,6 +9,7 @@
+ #include "gx_hook.hpp"
+ #include "cinematic_projection.hpp"
+ #include "runtime_internal.hpp"
++#include "ntr/hash.hpp"
+ 
+ namespace ntr::gx {
+ 
+@@ -108,6 +109,11 @@
+ void Streams::vblank_hook(void* self, bool flushed) { static_cast<Streams*>(self)->on_vblank(flushed); }
+ 
+ void Streams::on_command(uint8_t op, uint32_t param) {
++    if (op == 0x40 && !current_.first_view_hash && g_.ProjMatrix[11] < 0 && g_.ProjMatrix[15] == 0) {
++        current_.focal_x = g_.ProjMatrix[0]; current_.focal_y = g_.ProjMatrix[5];
++        current_.offset_y = g_.ProjMatrix[9];
++        current_.first_view_hash = ntr::hash64(g_.PosMatrix, sizeof g_.PosMatrix);
++    }
+     if (current_.entries.empty() && (check || interpolate || display_rate || cinematic)) save_state(g_, current_.start);
+     current_.entries.push_back({op, param});
+     if (op != 0x50) return;
+--- /dev/null
++++ b/runtime/include/ntr/graphics_context.hpp
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include <array>
++#include <cstdint>
++
++namespace ntr {
++
++// Read-only diagnostics, not a scene classifier. Counts describe explicit projection loads
++// in the latest completed GX stream; the host must also check whether/when 3D is displayed.
++struct ProjectionSummary {
++    uint32_t perspective_positive_y = 0, perspective_negative_y = 0, perspective_centered = 0;
++    uint32_t orthographic = 0, other = 0;
++    bool complete = true;
++};
++
++struct GraphicsContext {
++    uint64_t geometry_frame = 0;
++    // Effective projection and model-view signature at the first perspective primitive.
++    int32_t focal_x = 0, focal_y = 0, offset_y = 0;
++    uint64_t first_view_hash = 0;
++    ProjectionSummary projection;
++    bool screen_swap = false;
++    uint32_t capture_control = 0;
++    std::array<uint32_t, 2> display_control{};
++    // Engine A's four BGs, then engine B's four BGs; SDK register values only.
++    std::array<uint16_t, 8> bg_control{}, scroll_x{}, scroll_y{};
++    // A BG2/BG3, B BG2/BG3. Each affine transform is A/B/C/D in order.
++    std::array<int32_t, 4> reference_x{}, reference_y{};
++    std::array<int16_t, 16> affine{};
++};
++
++} // namespace ntr
+--- /dev/null
++++ b/runtime/src/gx_inspect.hpp
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: GPL-3.0-or-later
++#pragma once
++
++#include "gx_match.hpp"
++#include "ntr/graphics_context.hpp"
++
++namespace ntr::gx {
++
++inline ProjectionSummary inspect_projections(const std::vector<Entry>& entries) {
++    ProjectionSummary result;
++    // A retained stream may start midway through matrix state. Count only loads whose mode was explicit here.
++    uint32_t mode = ~uint32_t(0);
++    for (size_t i = 0; i < entries.size();) {
++        const auto count = size_t(entry_count(entries[i].op));
++        if (i + count > entries.size()) { result.complete = false; return result; }
++        if (entries[i].op == 0x10) mode = entries[i].param & 3;
++        if (mode == 0 && entries[i].op == 0x16) {
++            const auto w = int32_t(entries[i + 11].param);
++            const auto last = int32_t(entries[i + 15].param);
++            const auto offset = int32_t(entries[i + 9].param);
++            if (w < 0 && last == 0) {
++                if (offset > 0) ++result.perspective_positive_y;
++                else if (offset < 0) ++result.perspective_negative_y;
++                else ++result.perspective_centered;
++            } else if (w == 0 && last != 0) ++result.orthographic;
++            else ++result.other;
++        }
++        i += count;
++    }
++    return result;
++}
++
++} // namespace ntr::gx

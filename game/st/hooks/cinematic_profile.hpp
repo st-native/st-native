@@ -14,4 +14,8 @@ inline constexpr ntr::CinematicUiPlacement opening_ui_placement{44, 4, 168, 126}
 static_assert(ntr::valid_cinematic_ui_placement(opening_ui_placement));
 static_assert(opening_ui_placement.width * 3 == opening_ui_placement.height * 4);
 
+// New-game prologue: original top text begins around row 80; move it to the lower part of the
+// art canvas. The generic compositor fits unexpected longer text rather than cropping glyphs.
+inline constexpr int prologue_text_offset_y = 40;
+
 } // namespace st

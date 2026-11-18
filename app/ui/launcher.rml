@@ -47,7 +47,7 @@
           </div>
           <div id="settings-screens" class="settings-page selected">
           <div class="field">
-            <label for="screen-layout">Screen layout</label>
+            <label for="screen-layout">Two-screen layout</label>
             <select id="screen-layout">
               <option value="focus">Large + side</option>
               <option value="classic">Classic DS</option>
@@ -56,9 +56,9 @@
             </select>
           </div>
           <div class="field">
-            <label for="auto-join">Cutscene view</label>
+            <label for="auto-join">Presentation</label>
             <select id="auto-join">
-              <option value="automatic">Single screen</option>
+              <option value="automatic">Automatic (PC)</option>
               <option value="manual">Original DS</option>
             </select>
           </div>

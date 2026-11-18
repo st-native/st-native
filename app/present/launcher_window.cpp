@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "launcher_window.hpp"
+#include "cursor_interface.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi_Platform_SDL.h>
@@ -35,7 +36,7 @@ bool save_preview(int width, int height, const char* path) {
 struct LauncherWindow::State {
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> window{nullptr, SDL_DestroyWindow};
     SDL_GLContext gl = nullptr;
-    std::unique_ptr<SystemInterface_SDL> system;
+    std::unique_ptr<st::CursorInterface> system;
     std::unique_ptr<RenderInterface_GL3> renderer;
     Rml::Context* pumping_context = nullptr;
     GLuint game_framebuffer = 0;
@@ -113,7 +114,7 @@ bool LauncherWindow::open(const char* title, int width, int height) {
     if (!state_->gl || !gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) return false;
 
     SDL_GL_SetSwapInterval(1);
-    state_->system = std::make_unique<SystemInterface_SDL>(window());
+    state_->system = std::make_unique<st::CursorInterface>(window());
     state_->renderer = std::make_unique<RenderInterface_GL3>();
     if (!*state_->renderer) return SDL_SetError("Could not initialize the RmlUi OpenGL renderer");
     Rml::SetSystemInterface(state_->system.get());
@@ -144,6 +145,7 @@ bool LauncherWindow::process_events(Rml::Context& context) {
 }
 
 bool LauncherWindow::draw(Rml::Context& context, const char* preview_path) {
+    state_->system->set_game_mode(false);
     if (SDL_GL_GetCurrentContext() != state_->gl && !SDL_GL_MakeCurrent(window(), state_->gl)) return false;
     int width, height;
     if (!SDL_GetWindowSizeInPixels(window(), &width, &height) || width <= 0 || height <= 0) return false;
@@ -161,6 +163,7 @@ bool LauncherWindow::draw(Rml::Context& context, const char* preview_path) {
 }
 
 bool LauncherWindow::present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) {
+    state_->system->set_game_mode(true);
     if (!touch_captured && state_->shared_scene != shared_scene) {
         state_->shared_scene = shared_scene;
         if (state_->automatic_join) state_->classic_override = false;
@@ -212,6 +215,7 @@ void LauncherWindow::menu_input(Rml::Context& context, SDL_Event& event) {
 }
 
 bool LauncherWindow::draw_pause(Rml::Context& context) {
+    state_->system->set_game_mode(false);
     int width, height;
     if (!SDL_GetWindowSizeInPixels(window(), &width, &height) || width <= 0 || height <= 0) return true;
     if (!draw_game()) return false;

@@ -24,6 +24,7 @@
 #include "../utf8_path.hpp"
 #include "../game_session.hpp"
 #include "../present/launcher_window.hpp"
+#include "../present/cursor_interface.hpp"
 #include "../setup/launcher_worker.hpp"
 
 namespace fs = std::filesystem;
@@ -597,9 +598,17 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         };
         launcher.verify_rom(path_to_utf8(fs::absolute(game_smoke)));
         if (!wait_for_worker(30'000)) return 8;
-        document->GetElementById("play")->DispatchEvent(Rml::EventId::Click, {});
-        if (!wait_for_worker(15 * 60'000)) return 8;
-        auto game = launcher.take_launch();
+        std::optional<st::GameLaunch> game;
+        // Developer replay tests can reuse an already verified local module without rebuilding it.
+        if (const char* module = std::getenv("ST_NATIVE_SMOKE_MODULE")) {
+            game = st::GameLaunch{};
+            game->rom = fs::absolute(game_smoke);
+            game->module = fs::absolute(path_from_utf8(module));
+        } else {
+            document->GetElementById("play")->DispatchEvent(Rml::EventId::Click, {});
+            if (!wait_for_worker(15 * 60'000)) return 8;
+            game = launcher.take_launch();
+        }
         auto lock = lock_launcher_session(checkout);
         if (!game || !lock) return 8;
 
@@ -668,8 +677,30 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         pause_document->GetElementById("tab-window")->DispatchEvent(Rml::EventId::Click, {});
         if (!pause.draw() || !pause_document->GetElementById("display")->IsVisible(true) ||
             layout_control.IsVisible(true)) return 11;
+        // A disabled launcher control must not leave its forbidden cursor on the game canvas.
+        auto& cursors = static_cast<st::CursorInterface&>(*Rml::GetSystemInterface());
+        cursors.SetMouseCursor("arrow");
+        const auto* arrow = SDL_GetCursor();
+        cursors.SetMouseCursor("text");
+        const auto* text = SDL_GetCursor();
+        cursors.SetMouseCursor("unavailable");
+        const auto* unavailable = SDL_GetCursor();
+        if (!arrow || !text || !unavailable || arrow == text || arrow == unavailable) return 12;
+        if (!window.present_game(tiles.data(), false, false, false) || SDL_GetCursor() != arrow) return 12;
+        cursors.SetMouseCursor("unavailable"); // even a hidden UI request cannot take over the game cursor
+        if (SDL_GetCursor() != arrow) return 12;
+        cursors.set_game_mode(false);
+        if (SDL_GetCursor() != unavailable) return 12;
+        if (!window.present_game(tiles.data(), false, false, false) || SDL_GetCursor() != arrow || !pause.draw()) return 12;
+        cursors.SetMouseCursor("text");
+        if (SDL_GetCursor() != text) return 12;
+        if (!window.present_game(tiles.data(), false, false, false) || SDL_GetCursor() != arrow) return 12;
         pause.close();
         document->Show();
+        if (!window.draw(*context)) return 12;
+        cursors.SetMouseCursor("text");
+        if (SDL_GetCursor() != text) return 12;
+        cursors.SetMouseCursor("arrow");
         // Exercise the same worker and status updates as the picker with a file we know is not a ROM.
         launcher.verify_rom(path_to_utf8(assets / "launcher.rml"));
         const auto deadline = SDL_GetTicks() + 5000;

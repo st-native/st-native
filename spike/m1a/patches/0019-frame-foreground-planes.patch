@@ -1,0 +1,63 @@
+Expose optional read-only software foreground planes on the frame callback.
+
+Reuse existing text/palette-OBJ provenance; captured 3D bitmaps remain excluded.
+The host owns scene selection, placement and composition. No extra GPU pass.
+
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -68,6 +68,11 @@
+     // Software renderer: the two 256x192 screens (0xAARRGGBB); null for the GL renderers.
+     const uint32_t* top = nullptr;
+     const uint32_t* bottom = nullptr;
++    // Optional software foreground planes (text BG / palette OBJ, transparent elsewhere),
++    // physical top/touch order. Available with cinematic_camera; valid through Host::on_frame.
++    // Captured bitmap copies of 3D are excluded, just as in the optional cinematic UI pass.
++    const uint32_t* foreground_top = nullptr;
++    const uint32_t* foreground_bottom = nullptr;
+     // GL renderers: a GL_TEXTURE_2D_ARRAY of (256 x 192) * scale texels (wider with widescreen), layer 0 the top screen,
+     // layer 1 the bottom.
+     unsigned gl_texture = 0;
+@@ -175,7 +180,7 @@
+     // screen-space 3D overlay; the camera and original screens are not affected by that placement.
+     virtual const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}, CinematicCamera camera = {}) = 0;
+     // Game-thread-only read-only hardware/projection diagnostics; never returns pixels or commands.
+-    virtual GraphicsContext inspect_graphics() const = 0;
++    virtual GraphicsContext inspect_graphics(bool include_projection = true) const = 0;
+ };
+ 
+ // The message of the last fatal error ("" if there was none). A crash report quotes it: the log may not have it yet.
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -68,7 +68,7 @@
+     void set_cpu_speed(int multiplier) override { pending_cpu_speed_ = multiplier; }
+     unsigned render_between(double x) override;
+     const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}, CinematicCamera camera = {}) override;
+-    GraphicsContext inspect_graphics() const override;
++    GraphicsContext inspect_graphics(bool include_projection = true) const override;
+     static void capture_overlay_line(void* context, const melonDS::GPU2D& engine, u32 line,
+                                       const u32* foreground, const u32* composite);
+ 
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -426,6 +426,10 @@
+     if (n.GPU.GetFramebuffers(&top, &bottom)) {
+         frame.top = static_cast<const uint32_t*>(top);
+         frame.bottom = static_cast<const uint32_t*>(bottom);
++        if (options.cinematic_camera) {
++            frame.foreground_top = overlay_pixels_[0].data();
++            frame.foreground_bottom = overlay_pixels_[1].data();
++        }
+     } else {
+         frame.gl_texture = *static_cast<const GLuint*>(top);
+         frame.scale = video_.scale;
+@@ -684,8 +688,8 @@
+ // ---------------------------------------------------------------------------------------------------------------
+ // Calls
+ 
+-GraphicsContext RuntimeImpl::inspect_graphics() const {
+-    GraphicsContext result = gx_ ? gx_->graphics_context() : GraphicsContext{};
++GraphicsContext RuntimeImpl::inspect_graphics(bool include_projection) const {
++    GraphicsContext result = gx_ && include_projection ? gx_->graphics_context() : GraphicsContext{};
+     const auto& gpu = nds->GPU;
+     result.screen_swap = gpu.ScreenSwap;
+     result.capture_control = gpu.CaptureCnt;

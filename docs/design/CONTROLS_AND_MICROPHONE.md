@@ -15,6 +15,8 @@ Status: **Proposed** (2026-11-12). Related: [GAMEPLAY_INTERACTION_MATRIX.md](GAM
 The manual (p.12) says the game is "primarily played using the Touch Screen and microphone"; buttons are shortcuts
 (menu bar, map, collection, rail map/rail screen while driving, character switch; L/R take out the equipped item;
 START pauses and skips cutscenes). The game also has a **handedness** option that mirrors parts of the UI (p.11).
+The original stylus wording should become a device-aware controls preference in the PC presentation. The current
+choice and save setting remain unchanged; see [Narrative presentation](NARRATIVE_PRESENTATION.md#stylus-and-handedness-prompt).
 
 ## 2. Input architecture
 

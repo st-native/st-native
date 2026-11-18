@@ -35,6 +35,9 @@
 //                            (a scripted run then plays differently from frame 7); in a group of its own a run is
 //                            instance 0 with the default MAC, exactly as when it runs alone
 //     --frame-profile <csv>  numeric production/presentation/audio-queue diagnostics (no game data)
+//     --scene-profile <csv>  read-only display/projection diagnostics; --scene-stride 1 records every frame
+//     --layer-shots         with --shots, also write private foreground-plane checkpoints
+//     --preview-tower-camera  headless research preview of the asymmetric Tower camera; touch adaptation pending
 //     --perf, --trace-threads, --trace-calls   the runtime's logs
 //   Script: one step per line, "#" starts a comment. Frames count from 1, the first frame shown.
 //     <frame> press <KEY>[+<KEY>...] [<frames held, default 6>]
@@ -53,6 +56,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -68,6 +72,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include "present/subtitle_composition.hpp"
 #include <vector>
 
 #include "ntr/recomp.h"
@@ -103,12 +108,13 @@ constexpr KnownDump kKnown[] = {
 };
 
 struct Options {
-    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile;
+    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile, scene_profile;
     std::string wireless_group, player_name = "Link";
     std::vector<std::pair<uint64_t, std::string>> ram_dumps;
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
-         trace_calls = false, slow_cart = false, fullscreen = false, gx_check = false;
-    int scale = 2, cpu_speed = 4;
+         trace_calls = false, slow_cart = false, fullscreen = false, gx_check = false, preview_tower_camera = false,
+         layer_shots = false;
+    int scale = 2, cpu_speed = 4, scene_stride = 30;
     double cinematic_aspect = 0;
     uint64_t exit_after = 0;
     uint8_t language = 1;
@@ -265,7 +271,8 @@ void queue_name_text(st::NameKeyboard& keyboard, std::string_view text) {
 class StHost : public st::NameHost {
 public:
     StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes, bool track_scene)
-        : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes), track_scene_(track_scene) {}
+        : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes), track_scene_(track_scene),
+          screen_context_(o.preview_tower_camera) {}
     void attach(ntr::Runtime* rt) { rt_ = rt; }
     uint64_t frames() const { return frame_; }
     uint64_t interp_total() const { return interp_total_; }
@@ -280,6 +287,12 @@ public:
         SDL_ClearAudioStream(audio_);
     }
     void set_profile(std::ostream* stream) { profile_ = stream; }
+    void set_scene_profile(std::ostream* stream, const ntr::GameCode& code) {
+        scene_profile_ = stream;
+        for (size_t i = 0; i < code.overlay_count; ++i)
+            if (code.overlays[i].id != 1) scene_overlay_ids_.push_back(code.overlays[i].id);
+        // Overlay 1 is DS Protect. Its code/probes are deliberately excluded from this survey.
+    }
 
     bool on_frame(const ntr::Frame& f) override {
         const auto profile_start = profile_ ? SDL_GetTicksNS() : 0;
@@ -292,10 +305,41 @@ public:
                          (unsigned long long)f.state_hash, (unsigned long long)f.interp_steps,
                          (unsigned long long)f.ram_hash);
         if (!o_.control.empty() && !control(f)) return false;
-        const bool shared_scene = track_scene_ && screen_context_.update(*rt_, f);
+        const bool shared_scene = track_scene_ && screen_context_.update(*rt_, f, frame_);
+        if (scene_profile_ && (frame_ % o_.scene_stride == 0 || frame_ % o_.scene_stride == 1)) {
+            const auto g = rt_->inspect_graphics();
+            const auto& p = g.projection;
+            *scene_profile_ << frame_ << ',' << f.display_capture << ',' << g.screen_swap << ',' << g.geometry_frame
+                << ',' << p.perspective_positive_y << ',' << p.perspective_negative_y << ',' << p.perspective_centered
+                << ',' << p.orthographic << ',' << p.other << ',' << p.complete << ',' << g.capture_control;
+            for (const auto v : g.display_control) *scene_profile_ << ',' << v;
+            for (const auto v : g.bg_control) *scene_profile_ << ',' << v;
+            for (const auto v : g.scroll_x) *scene_profile_ << ',' << v;
+            for (const auto v : g.scroll_y) *scene_profile_ << ',' << v;
+            for (const auto v : g.reference_x) *scene_profile_ << ',' << v;
+            for (const auto v : g.reference_y) *scene_profile_ << ',' << v;
+            for (const auto v : g.affine) *scene_profile_ << ',' << v;
+            *scene_profile_ << ',' << g.focal_x << ',' << g.focal_y << ',' << g.offset_y << ','
+                << g.first_view_hash << ',' << shared_scene << ',';
+            bool first = true;
+            for (const auto id : scene_overlay_ids_)
+                if (rt_->is_overlay_resident(id)) {
+                    if (!first) *scene_profile_ << ';';
+                    *scene_profile_ << id;
+                    first = false;
+                }
+            *scene_profile_ << '\n';
+        }
         const double aspect = o_.cinematic_aspect > 0 ? o_.cinematic_aspect : sh_.cinematic_aspect.load();
         const auto camera_start = profile_ ? SDL_GetTicksNS() : 0;
-        const auto* cinematic = shared_scene && aspect > 0 ? rt_->render_cinematic(aspect, screen_context_.ui_placement()) : nullptr;
+        const uint32_t* cinematic = nullptr;
+        if (shared_scene && aspect > 0) {
+            if (screen_context_.narration()) {
+                if (st::compose_subtitles(narration_pixels_.data(), f.bottom, f.foreground_top,
+                                         {screen_context_.narration_text_offset()}))
+                    cinematic = narration_pixels_.data();
+            } else cinematic = rt_->render_cinematic(aspect, screen_context_.ui_placement(), screen_context_.camera());
+        }
         const double camera_ms = profile_ ? double(SDL_GetTicksNS() - camera_start) / 1e6 : 0;
         cinematic_frames_ += cinematic != nullptr;
         if (!o_.headless && f.top && f.bottom) {
@@ -351,6 +395,10 @@ public:
                 else std::printf("frame %llu: shot %s\n", (unsigned long long)frame_, p.string().c_str());
                 if (cinematic)
                     write_bmp(o_.shots / (s.name + "_cinematic.bmp"), cinematic, nullptr);
+                if (o_.layer_shots && f.foreground_top && f.foreground_bottom) {
+                    write_bmp(o_.shots / (s.name + "_foreground_top.bmp"), f.foreground_top, nullptr);
+                    write_bmp(o_.shots / (s.name + "_foreground_touch.bmp"), f.foreground_bottom, nullptr);
+                }
             } else if (s.kind == Step::Type && frame_ == s.frame) {
                 queue_name_text(name_keyboard, s.name);
             } else if (s.kind == Step::EraseName && frame_ == s.frame) {
@@ -522,11 +570,14 @@ private:
     FILE* hashes_;
     bool track_scene_;
     st::ScreenContext screen_context_;
+    std::array<uint32_t, kW * kH> narration_pixels_{};
     ntr::Runtime* rt_ = nullptr;
     SDL_AudioStream* audio_ = nullptr;
     std::mutex audio_mutex_;
     bool audio_started_ = false, audio_paused_ = false;
     std::ostream* profile_ = nullptr;
+    std::ostream* scene_profile_ = nullptr;
+    std::vector<uint32_t> scene_overlay_ids_;
     uint64_t profile_previous_ = 0, audio_empty_feeds_ = 0, audio_dropped_samples_ = 0;
     uint64_t frame_ = 0, interp_total_ = 0, deadline_ = 0;
     uint64_t cinematic_frames_ = 0;
@@ -604,6 +655,16 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--exit-after") o.exit_after = std::strtoull(next().c_str(), nullptr, 10);
         else if (a == "--hashes") o.hashes = next_path();
         else if (a == "--frame-profile") o.frame_profile = next_path();
+        else if (a == "--scene-profile") o.scene_profile = next_path();
+        else if (a == "--layer-shots") o.layer_shots = true;
+        else if (a == "--preview-tower-camera") o.preview_tower_camera = true;
+        else if (a == "--scene-stride") {
+            const auto text = next(); char* end = nullptr;
+            const auto stride = std::strtol(text.c_str(), &end, 10);
+            if (text.empty() || *end || stride < 1 || stride > 600)
+                return std::fprintf(stderr, "--scene-stride needs an integer from 1 to 600\n"), false;
+            o.scene_stride = int(stride);
+        }
         else if (a == "--shots") o.shots = next_path();
         else if (a == "--counts") o.counts = next_path();
         else if (a == "--record") o.record = next_path();
@@ -634,6 +695,10 @@ bool parse_args(int argc, char** argv, Options& o) {
     }
     if (o.rom.empty() || o.module.empty()) {
         std::fprintf(stderr, "usage: st_native <rom.nds> --module <st_game.dll> [options] (see app/st_native.cpp)\n");
+        return false;
+    }
+    if (o.preview_tower_camera && !o.headless) {
+        std::fprintf(stderr, "--preview-tower-camera requires --headless; interactive touch mapping is not adapted\n");
         return false;
     }
     if (o.headless && !o.exit_after && o.script.empty() && o.control.empty()) {
@@ -720,7 +785,19 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         if (!frame_profile || !present_profile)
             return std::fprintf(stderr, "cannot open frame profile output\n"), 2;
         frame_profile << "frame,timestamp_ns,interval_ms,guest_ms,camera_ms,host_ms,audio_queued_ms,audio_empty_feeds,audio_dropped_samples\n";
-        present_profile << "frame,interval_ms,present_ms,age_ms\n";
+        present_profile << "frame,interval_ms,present_ms,age_ms,shared_scene,cinematic\n";
+    }
+    std::ofstream scene_profile;
+    if (!o.scene_profile.empty()) {
+        scene_profile.open(o.scene_profile);
+        if (!scene_profile) return std::fprintf(stderr, "cannot open scene profile output\n"), 2;
+        scene_profile << "frame,capture,swap,geometry_frame,perspective_positive,perspective_negative,perspective_centered,orthographic,other,complete,capture_control,a_display,b_display";
+        for (const char* name : {"bg_control", "scroll_x", "scroll_y"})
+            for (int i = 0; i < 8; ++i) scene_profile << ',' << name << i;
+        for (const char* name : {"reference_x", "reference_y"})
+            for (int i = 0; i < 4; ++i) scene_profile << ',' << name << i;
+        for (int i = 0; i < 16; ++i) scene_profile << ",affine" << i;
+        scene_profile << ",focal_x,focal_y,offset_y,first_view_hash,single_scene,overlays\n";
     }
     const SDL_InitFlags systems = o.headless ? 0 : SDL_INIT_AUDIO | SDL_INIT_GAMEPAD | (presentation ? 0 : SDL_INIT_VIDEO);
     if (!SDL_InitSubSystem(systems))
@@ -764,7 +841,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     }
     ro.cpu_speed = o.cpu_speed;
     ro.fast_cart = !o.slow_cart;
-    ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0;
+    ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0 || !o.scene_profile.empty() || o.layer_shots;
 
     Shared sh;
     if (!o.headless) {
@@ -773,6 +850,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     }
     StHost host(o, sh, std::move(script), hashes, ro.cinematic_camera);
     if (frame_profile.is_open()) host.set_profile(&frame_profile);
+    if (scene_profile.is_open()) host.set_scene_profile(&scene_profile, code);
 
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> owned_window(nullptr, SDL_DestroyWindow);
     std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)> renderer(nullptr, SDL_DestroyRenderer);
@@ -1002,7 +1080,8 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 const auto end = SDL_GetTicksNS();
                 present_profile << frame_number << ','
                     << (previous_present_ns ? double(end - previous_present_ns) / 1e6 : 0) << ','
-                    << double(end - present_start) / 1e6 << ',' << double(end - published_ns) / 1e6 << '\n';
+                    << double(end - present_start) / 1e6 << ',' << double(end - published_ns) / 1e6 << ','
+                    << shared_scene << ',' << cinematic << '\n';
                 previous_present_ns = end;
             }
             if (test_menu_after && !view_error) {
@@ -1070,6 +1149,16 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
     o.scale = launch.scale;
     o.fullscreen = launch.fullscreen;
     o.no_save = test_menu_after != 0;
+    // Advanced-checkpoint replay controls exist only in the explicit developer smoke-test path.
+    if (test_menu_after) {
+        if (const auto* save = std::getenv("ST_NATIVE_SMOKE_SAVE")) {
+            o.save = path_from_utf8(save);
+            o.no_save = false;
+            o.read_only_save = true;
+        }
+        if (const auto* script = std::getenv("ST_NATIVE_SMOKE_SCRIPT")) o.script = path_from_utf8(script);
+        if (const auto* profile = std::getenv("ST_NATIVE_SMOKE_SCENE_PROFILE")) o.scene_profile = path_from_utf8(profile);
+    }
     presentation.set_screen_layout(launch.layout, launch.automatic_join);
     SDL_Window& window = *presentation.window();
 

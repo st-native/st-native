@@ -28,9 +28,16 @@ started with brightness/pixel heuristics and replaced them with a read-only game
 
 ## Implementation note (2026-11-17)
 
-**Verified for the pre-title opening only:** the game layer identifies a shared scene by overlay residency and display
-capture (see `game/st/hooks/screen_context.hpp`). The frontend fits the optional cinematic view to a centered 4:3
+The game layer identifies the opening by residency/capture, and Cole's interval by residency plus fresh opposed
+projection pairs (`game/st/hooks/screen_context.hpp`, `screen_policy.hpp`). The frontend fits the optional cinematic view to a centered 4:3
 rectangle and routes that view's pointer to the original Touch Screen coordinates. The runtime supplies an extra,
 recentered camera image and its UI layers; it does not choose a layout or window geometry. This is a camera
 rendering enhancement, separate from laying out the two unmodified screen images. Both original images remain
 available through the manual override. The camera pass restores the original geometry and never writes guest RAM.
+The generic asymmetric span is used only in a headless Tower preview until inverse touch mapping is adapted.
+See [scene validation](../../design/DUAL_SCREEN_VALIDATION.md) for measured coverage and remaining acceptance work.
+
+**Narrated prologue (2026-11-18):** the game layer verifies residency and SDK display state; the app composes
+optional software foreground text over the original Touch Screen art. Alpha bounds are used for rendering only,
+never context detection. No additional camera pass or guest write is needed. Automatic presentation releases this
+rule before gameplay's display-window state. See [Narrative presentation](../../design/NARRATIVE_PRESENTATION.md).

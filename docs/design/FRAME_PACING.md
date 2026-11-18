@@ -61,6 +61,9 @@ The parent directory must exist. Optional developer smoke controls (only used wi
 The original CLI option or environment variable writes a game-thread CSV and a `.present.csv` sidecar for the
 window thread. Fields include numeric timing, camera cost, input-queue depth, empty-feed observations, dropped
 sample counts and guest frame IDs; no assets, memory contents, ROM paths or audio samples are recorded.
+The presentation sidecar also records `shared_scene` and `cinematic`, indicating whether each displayed frame used
+an identified scene and actually supplied the extra camera image. These help distinguish a rendering preview from
+a context decision without relying on screenshots.
 Raw diagnostic files belong under ignored `build/`. Remove the environment variable after a profiling run.
 
 Run hash/image correctness checks separately with `tests/rom/title_single_screen.txt`, `--hashes`, local `--shots`

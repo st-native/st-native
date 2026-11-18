@@ -96,7 +96,8 @@ both screens without a gap, **Side by side** gives both screens the same size, a
 the top screen in the upper-right corner. The mouse starts touches only on the DS touch screen.
 
 The launcher groups these options into **Screens**, **Window** and **Game**. **Esc** and **F1** open the pause menu
-with **Screens** and **Window** tabs. **Cutscene view → Full window** renders the pre-title opening with a central
+with **Screens** and **Window** tabs. **Presentation → Automatic (PC)** composes the narrated prologue's text over
+its art and renders the pre-title opening with a central
 camera fitted to the window aspect. The projection restores the scene area hidden between the DS screens and
 renders it as one continuous picture without stretching to widescreen. It returns to the selected layout at the title. **Original DS** keeps the
 two original views. **F2** overrides the cinematic view for the current scene.
@@ -223,8 +224,13 @@ Compare the pictures in `build\boot1\` with the steps in the script's comments.
 | `missing tool: …` | step 2 or 3 was skipped, or LLVM is not at `C:\Program Files\LLVM` |
 | `the game module needs the hook …` | the module and the program come from different revisions: rebuild both |
 | `the runtime stopped: …` | a fatal error in the emulated console. Report the message, the frame, and the steps that led there (no screenshots or files from the game) |
+| A forbidden cursor remains over the game | Fixed in the current launcher: menu controls can request an unavailable cursor while disabled; the game now explicitly owns the arrow cursor, restoring menu/text cursors on pause or return. The ROM-free launcher smoke test covers this handoff. |
 
 ### Frame pacing diagnostics
+
+For local graphics-context surveys with advanced saves, see
+[Continuous dual-screen scene survey](design/DUAL_SCREEN_VALIDATION.md). `--scene-profile <local.csv>` records
+numeric graphics metadata; `--scene-stride 1` samples every frame. Keep saves and output below ignored `build/`.
 
 The current Windows alpha primes about 50 ms of source audio at startup and after pause/resume, and wakes the
 window when a new frame is ready. This handles short scheduling delays; sustained slow rendering can still starve

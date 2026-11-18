@@ -30,7 +30,9 @@ HUD moves). Reference behaviour: Wind Waker HD Recomp `docs/gamepad-display.md`.
 **Side by side**, and **PiP overlay**. Large + side gives the touch screen twice the linear size of the top
 screen in a landscape window. The secondary view has its own space, so it cannot cover the HUD. In a portrait
 window this mode uses an equally sized stack. Picture-in-picture is an explicit upper-right overlay.
-**Cutscene view** defaults to Single screen. The pre-title 3D opening uses a re-rendered central projection
+**Presentation** defaults to **Automatic (PC)**. The narrated prologue composes its top-screen text over the original
+Touch Screen art, without PiP; see [Narrative presentation](NARRATIVE_PRESENTATION.md). Unverified gameplay contexts
+keep the chosen two-screen layout. The pre-title 3D opening uses a re-rendered central projection
 in the largest centered 4:3 game view; unused window space stays black. It recovers the vertical interval omitted between the original off-axis views, instead of
 compositing the two finished screens. The original projection and game state are restored after drawing the extra
 view. This first implementation rasterizes at 256×192. It recomposes a camera view rather than preserving every
@@ -39,13 +41,20 @@ The opening's game-side profile places its complete screen-space 3D UI canvas in
 at (44, 4), above the lower prompt. Only the extra cinematic image uses this placement. The 2D prompt, copyright,
 touch mapping and both original DS screen images are unchanged. The engine accepts a generic placement rectangle;
 it has no logo-specific positions or game IDs.
-**Original DS** preserves the two-screen composition. F2 overrides the current scene. Other scene-specific rules
-remain Proposed. See the [scene validation list](GAMEPLAY_INTERACTION_MATRIX.md#scenes-to-check-with-the-desktop-layouts).
+**Original DS** preserves the two-screen composition. F2 overrides the current scene. The Cole profile uses the
+same symmetric camera with full-size UI; other interactive scene rules remain Proposed. See the
+[scene validation list](GAMEPLAY_INTERACTION_MATRIX.md#scenes-to-check-with-the-desktop-layouts).
 
 ### Reusing the cinematic camera
 
-**Verified:** only the pre-title opening currently selects this camera. Its logo, prompt, overlay IDs and scene
-lifecycle are not special cases inside the engine. The engine operates on projection matrices and 2D layer provenance.
+The [local scene survey](DUAL_SCREEN_VALIDATION.md) now includes community checkpoints for Cole and the Tower.
+It confirms different projection patterns. Cole is enabled for its verified pair; the Tower is a headless preview.
+Boss approaches are recorded separately from verified boss introductions.
+
+**Implemented:** the pre-title opening and Cole's verified opposed-frustum interval select this camera. Only the
+opening profile shrinks the title UI; Cole keeps identity UI placement. The pure scene policy is separate from the
+runtime adapter and has ROM-free lifecycle tests. The engine operates on projection matrices and 2D layer provenance.
+A Tower asymmetric-span preview is restricted to the headless CLI until its touch coordinates and UI are adapted.
 
 To support another scene:
 

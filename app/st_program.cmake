@@ -24,6 +24,16 @@ if(FFCC_BUILD_TESTS)
   target_include_directories(st_cinematic_tests PRIVATE "${CMAKE_SOURCE_DIR}/runtime/src"
                              "${CMAKE_SOURCE_DIR}/runtime/include")
   add_test(NAME st_cinematic_projection COMMAND st_cinematic_tests)
+  add_executable(st_graphics_inspection_tests "${ST_ROOT}/tests/test_graphics_inspection.cpp"
+                 "${CMAKE_SOURCE_DIR}/runtime/src/gx_match.cpp")
+  target_include_directories(st_graphics_inspection_tests PRIVATE "${CMAKE_SOURCE_DIR}/runtime/src"
+                             "${CMAKE_SOURCE_DIR}/runtime/include")
+  add_test(NAME st_graphics_inspection COMMAND st_graphics_inspection_tests)
+  add_executable(st_screen_context_tests "${ST_ROOT}/tests/test_screen_context.cpp")
+  target_include_directories(st_screen_context_tests PRIVATE "${CMAKE_SOURCE_DIR}/runtime/include")
+  add_test(NAME st_screen_context COMMAND st_screen_context_tests)
+  add_executable(st_subtitle_composition_tests "${ST_ROOT}/tests/test_subtitle_composition.cpp")
+  add_test(NAME st_subtitle_composition COMMAND st_subtitle_composition_tests)
 endif()
 
 # Source-checkout launcher for the Windows developer alpha. Reuse the engine's pinned RmlUi/GL3 backend.

@@ -96,5 +96,27 @@ int main() {
     auto modelview = projection(4096);
     modelview[0].param = 1;
     if (center_split_projection(modelview, 16.0 / 9)) return 6;
+    // A centered world half and an off-axis half must produce exactly the same union camera.
+    for (const auto span : {std::pair{0, 9032}, {-9032, 0}, {-4096, 4096}, {1234, 5678}}) {
+        ntr::CinematicCamera camera{true, span.first, span.second, false};
+        auto low = projection(span.first), high = projection(span.second);
+        if (!center_split_projection(low, 4.0 / 3, camera) ||
+            !center_split_projection(high, 4.0 / 3, camera)) return 19;
+        for (size_t i = 0; i < low.size(); ++i)
+            if (low[i].param != high[i].param) return 20;
+        // SDK clip-space boundaries of the two original halves map to -1/+1 in the union.
+        for (auto endpoint : {std::pair{span.first - 4096, -1.0}, {span.second + 4096, 1.0}}) {
+            const double y = double(endpoint.first) * int32_t(low[6].param) / (4 * 4096.0 * 4096.0) -
+                double(int32_t(low[10].param)) / 4096.0;
+            if (std::abs(y - endpoint.second) > 0.001) return 21;
+        }
+        auto ui = orthographic;
+        if (center_split_projection(ui, 4.0 / 3, camera) || ui[16].param != orthographic[16].param) return 22;
+    }
+    if (ntr::gx::has_centered_projection(projection(0), false) ||
+        !ntr::gx::has_centered_projection(orthographic, false)) return 23;
+    auto explicit_invalid = projection(0);
+    if (center_split_projection(explicit_invalid, 4.0 / 3, {true, 0, 0, false}) ||
+        center_split_projection(explicit_invalid, 4.0 / 3, {true, -32769, 4096, false})) return 24;
     return 0;
 }

@@ -1,0 +1,52 @@
+# Our own physical button/stylus input, starting with --no-save; no game data included.
+# Covers file setup, narrated prologue, its exit and Niko's first dialogue/choice.
+# Uses the same inputs as first_scene.txt, with additional presentation checkpoints.
+# See docs/design/NARRATIVE_PRESENTATION.md. Screenshots/hash logs stay under ignored build/.
+1000 press START                   # skip the opening
+1100 touch 128 120                 # touch the screen
+1850 touch 128 160                 # dismiss the message
+2000 touch 130 62                  # file 1
+2200 touch 190 176                 # OK
+2400 touch 202 110                 # "Is this what you want to name your character?" Yes
+2600 touch 202 110                 # "Do you hold the stylus in your right or left hand?" Right
+2600 shot p02600
+2800 touch 205 110                 # "You're right-handed?" Yes
+2800 shot p02800
+3150 touch 128 160                 # dismiss the message
+3400 touch 130 62                  # file 1 (now named, three hearts)
+3600 touch 128 118                 # Start
+3800 touch 130 91                  # Adventure: the new game starts
+3800 shot p03800
+3900 shot p03900
+4100 shot p04100
+4400 shot p04400
+6200 shot p06200
+9000 shot p09000
+10920 shot p10920
+10960 shot p10960
+11100 shot p11100
+12000 shot p12000
+12300 press A 4
+12540 press A 4
+12600 shot 01_first_scene
+12780 press A 4
+13020 press A 4
+13260 press A 4
+13500 press A 4
+13740 press A 4
+13980 press A 4
+14220 press A 4
+14460 press A 4
+14700 press A 4
+14940 press A 4
+15000 shot 02_dialogue
+15180 press A 4
+15420 press A 4
+15660 press A 4
+15900 press A 4
+16140 press A 4
+16380 press A 4
+16620 press A 4
+16860 press A 4
+17400 shot 03_first_choice              # a choice of two answers, left open
+17400 quit

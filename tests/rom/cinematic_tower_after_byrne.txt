@@ -1,0 +1,93 @@
+# Our own input data. No save or game assets are included.
+# Target: Tower after Byrne; northward approach.
+# Requires a LOCAL COPY of HelpTheWretched's save collection, Saves18, slot 1.
+# Source, loading instructions and verification limits: docs/design/DUAL_SCREEN_VALIDATION.md.
+# Use --save <local-copy.sav> --read-only-save; do not use --no-save.
+# Checkpoints are private screenshots, written only when --shots points below build/.
+# The approach scripts do not establish that a boss introduction was reached.
+1000 press START
+1100 touch 128 120
+1300 touch 130 62
+1500 touch 128 118
+1700 touch 130 91
+2400 touch 128 6 180
+2650 touch 128 6 180
+2900 touch 128 6 180
+3300 press A 4
+3420 press A 4
+3540 press A 4
+3660 press A 4
+3780 press A 4
+3900 press A 4
+4020 press A 4
+4140 press A 4
+4260 press A 4
+4380 press A 4
+4500 press A 4
+4620 press A 4
+4740 press A 4
+4860 press A 4
+4980 press A 4
+5100 press A 4
+5220 press A 4
+5340 press A 4
+5460 press A 4
+5580 press A 4
+5700 press A 4
+5820 press A 4
+5940 press A 4
+6060 press A 4
+6180 press A 4
+6300 press A 4
+6420 press A 4
+6540 press A 4
+6660 press A 4
+6780 press A 4
+6900 press A 4
+7020 press A 4
+7140 press A 4
+7260 press A 4
+7380 press A 4
+7500 press A 4
+7620 press A 4
+7740 press A 4
+7860 press A 4
+7980 press A 4
+8100 press A 4
+8220 press A 4
+8340 press A 4
+8460 press A 4
+8580 press A 4
+8700 press A 4
+8820 press A 4
+8940 press A 4
+9060 press A 4
+9180 press A 4
+9300 press A 4
+9420 press A 4
+9540 press A 4
+9660 press A 4
+9780 press A 4
+9900 press A 4
+10020 press A 4
+10140 press A 4
+10260 press A 4
+10380 press A 4
+10500 press A 4
+10620 press A 4
+10740 press A 4
+10860 press A 4
+10980 press A 4
+11100 press A 4
+11220 press A 4
+11340 press A 4
+11460 press A 4
+11580 press A 4
+11700 press A 4
+11820 press A 4
+11940 press A 4
+2200 shot loaded
+3600 shot approach
+6000 shot scene
+10000 shot later
+12000 quit
