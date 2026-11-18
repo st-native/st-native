@@ -1,7 +1,9 @@
-# Publishing on GitLab.com
+# Publishing on GitHub
 
-Status (2026-11-14): **nothing is published; no account exists.** The bundle is prepared locally for the
-maintainer's review. Agents never create the account, the project, a push or a release (AGENTS.md).
+Status (2026-11-18): the primary private repository is
+[st-native/st-native](https://github.com/st-native/st-native). The existing GitLab history was copied intact;
+GitLab is retained as a backup. New development and CI use GitHub. Visibility changes and releases remain
+maintainer decisions. Check [Actions](https://github.com/st-native/st-native/actions) for current CI results.
 
 ## 1. What is published, and what never is
 
@@ -27,45 +29,39 @@ It writes `build/publish/st-native/` (the files), `build/publish/BUNDLE_MANIFEST
 (`tools/check_no_game_data.py --tree`) must report the bundle clean; it blocks ROMs, game file formats, the dump's
 SHA-1, cartridge headers, NitroSDK build tags, generated C, reconstructed source, screenshots and large binaries.
 
-## 3. Steps for the maintainer (after reviewing)
+## 3. Updating the repository
 
-1. **Account.** Create a GitLab.com account dedicated to the project. Pending: e-mail provider, address, username.
-   Turn on two-factor authentication. Use the address only for the project (and as the rights-holder contact,
-   PUBLICATION_AND_BRANDING.md §3).
-2. **Project.** Create it **private** first. Licence: GPL-3.0-or-later (the bundle's `LICENSE`). Shared runners on.
-3. **First push**, from the bundle folder (commands to run yourself; the guard runs again before the commit):
+1. Prepare and review the allowlisted bundle using section 2. Keep the private working directory separate from
+   the publication checkout; never initialize or push the private workspace root.
+2. Use a checkout of the existing GitHub repository so every previous commit remains in its history:
 
    ```bash
-   cd build\publish\st-native
+   git clone https://github.com/st-native/st-native.git
    ```
-   ```bash
-   git init -b main
-   ```
+
+3. Copy only the reviewed bundle into that checkout, preserving its `.git` directory. Review the diff, then stage
+   it and run the guard **before every commit**:
+
    ```bash
    git add -A
-   ```
-   ```bash
-   python -I tools\check_no_game_data.py --staged
-   ```
-   ```bash
-   git commit -m "Spirit Tracks Native: static recompilation port (initial publication)"
-   ```
-   ```bash
-   git remote add origin https://gitlab.com/<username>/<project>.git
-   ```
-   ```bash
-   git push -u origin main
+   python -I tools/check_no_game_data.py --staged
+   git diff --cached --check
+   git commit -m "Describe the reviewed change"
+   git push origin main
    ```
 
-4. **CI.** Check the first pipeline (`.gitlab-ci.yml`: guard, unit tests, Linux x64 and arm64 builds with the
-   synthetic cartridge). It has not run yet anywhere; fix what fails before going public.
-5. **Public.** Only after the checklist in §5 is complete.
+4. GitHub Actions (`.github/workflows/ci.yml`) runs the data guard and Python tests, then Linux x64/arm64 builds,
+   the app/runtime C++ tests, fibers, recompiler difftests and our synthetic cartridge. It uses no user ROM.
+   Diagnostic artifacts contain test logs, not game modules or assets. Windows remains checked locally; this
+   workflow does not claim validation on the remaining target platforms.
+5. The retained GitLab remote is named `gitlab` in the maintainer's publication checkout. `origin` points to
+   GitHub. The migration does not delete or change the GitLab repository or force-push either host.
 
 ## 4. Decisions to make before publishing
 
 | Decision | Options | Recommendation |
 |---|---|---|
-| Account e-mail provider, address, username | pending | a provider that allows a project-only mailbox; the username can wait for the project name |
+| Hosting account | GitHub account `st-native` exists | keep credentials and contact configuration outside Git; use the project account for collaboration |
 | Project name | "Spirit Tracks Native" is a working name (PUBLICATION_AND_BRANDING.md §1) | decide before going public |
 | How the engine is included | (a) fetched at its pinned commit and patched at build time (the bundle today); (b) imported into `engine/` with its history (REPOSITORY_PLAN.md) | (a) for the first push: smaller, provenance obvious; (b) when we start changing the engine beyond patches |
 | The anti-piracy routines | the default build replaces their six entry points (as the engine does for FFCC), **but then the game removes the train's controls on the first train ride and cannot go on**; running the game's own checks (`--dsprot original`) plays through the train ride to Castle Town, saves and reloads (DSPROTECT_ORIGINAL_PATH.md §5) | ask counsel (Q4, Q14) first; only the original-checks path gives a playable game, so it is the candidate default |
@@ -75,7 +71,7 @@ SHA-1, cartridge headers, NitroSDK build tags, generated C, reconstructed source
 
 ## 5. Before the project goes public
 
-From PUBLICATION_AND_BRANDING.md §6, for GitLab:
+Publication-readiness checklist (historical branding research: PUBLICATION_AND_BRANDING.md §6):
 
 - [ ] Name and branding decided; original icon; disclaimer in README and NOTICE.
 - [ ] Licence and attribution final (`LICENSE`, `NOTICE.md`; the upstreams' "or later" question).

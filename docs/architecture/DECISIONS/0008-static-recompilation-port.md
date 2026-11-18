@@ -35,8 +35,9 @@ things:
    compilation of the game module happen on the player's computer (ADR-0002). The ROM, extracted assets, generated
    C, the compiled module and the reconstructed C++ never leave the player's or maintainer's machine.
 6. **What is published:** the application, the runtime, the recompiler (the engine, with our patches), the build and
-   verification tools, the synthetic tests and the documentation. Destination: GitLab.com, with an account dedicated to
-   the project (pending; nothing is published before the maintainer's review).
+   verification tools, the synthetic tests and the documentation. Current destination: the private GitHub repository
+   `st-native/st-native` (maintainer-requested migration, 2026-11-18); GitLab remains a backup. The maintainer reviews
+   and authorizes publication of the source bundle.
 
 ## Consequences
 

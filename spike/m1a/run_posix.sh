@@ -41,6 +41,9 @@ summary "fetch: $(tr '\n' ' ' < "$OUT/fetch.log")"
 # ---- V1: build (the engine has a Linux preset; macOS has none: the same settings by hand) + our headless host
 cd "$ENGINE"
 INCLUDE="-DCMAKE_PROJECT_FFCCEOTRecomp_INCLUDE=$HERE/host/m1a_targets.cmake"
+if [ "${ST_NATIVE_BUILD_APP:-0}" = 1 ]; then
+  INCLUDE="-DCMAKE_PROJECT_FFCCEOTRecomp_INCLUDE=$ROOT/app/st_targets.cmake"
+fi
 if [ "$OS" = Linux ]; then
   BUILD=build/linux-release
   CONFIGURE=(cmake --preset linux-release "$INCLUDE")
@@ -52,7 +55,7 @@ start=$(date +%s)
 if "${CONFIGURE[@]}" > "$OUT/v1_configure.log" 2>&1 \
    && cmake --build "$BUILD" -- -k 0 > "$OUT/v1_build.log" 2>&1; then
   summary "V1 build ok in $(( $(date +%s) - start )) s"
-  (cd "$BUILD" && ctest --output-on-failure > "$OUT/v1_ctest.log" 2>&1)
+  (cd "$BUILD" && ctest --output-on-failure > "$OUT/v1_ctest.log" 2>&1) || fail "V1 ctest FAILED"
   summary "V1 ctest: $(grep -E 'tests passed|tests failed' "$OUT/v1_ctest.log")"
   # ui_smoke has a fixed 120 s limit; on a slow software renderer, time the same run without it (slow or hung?)
   if grep -q "ui_smoke (Failed)" "$OUT/v1_ctest.log"; then
@@ -74,8 +77,11 @@ XOPEN=(); [ "$OS" = Darwin ] && XOPEN=(-D_XOPEN_SOURCE=600)
 for O in O0 O2; do
   if "$CXX_" -std=c++17 -$O -ffp-contract=off "${XOPEN[@]}" -I "$ENGINE/runtime/src" "$HERE/fiber_conformance.cpp" \
        "$ENGINE/runtime/src/fiber.cpp" -o "$WORK/fiber_$O" > "$OUT/v2_build_$O.log" 2>&1; then
-    "$WORK/fiber_$O" > "$OUT/v2_fiber_$O.txt" 2>&1
-    summary "V2 -$O exit $?: $(tail -1 "$OUT/v2_fiber_$O.txt")"
+    if "$WORK/fiber_$O" > "$OUT/v2_fiber_$O.txt" 2>&1; then
+      summary "V2 -$O exit 0: $(tail -1 "$OUT/v2_fiber_$O.txt")"
+    else
+      fail "V2 -$O FAILED: $(tail -1 "$OUT/v2_fiber_$O.txt")"
+    fi
   else
     fail "V2 -$O build FAILED: $(grep -m2 'error' "$OUT/v2_build_$O.log" | cut -c1-200 | tr '\n' ' ')"
   fi
@@ -88,8 +94,11 @@ if [ "$OS" = Linux ] && [ "$(uname -m)" = aarch64 ]; then
     > "$WORK/fiber_android_path.cpp"
   if "$CXX_" -std=c++17 -O2 -ffp-contract=off -I "$ENGINE/runtime/src" "$HERE/fiber_conformance.cpp" \
        "$WORK/fiber_android_path.cpp" -o "$WORK/fiber_android_path" > "$OUT/v2_build_android_path.log" 2>&1; then
-    "$WORK/fiber_android_path" > "$OUT/v2_fiber_android_path.txt" 2>&1
-    summary "V2 Android context switch (on arm64 Linux) exit $?: $(tail -1 "$OUT/v2_fiber_android_path.txt")"
+    if "$WORK/fiber_android_path" > "$OUT/v2_fiber_android_path.txt" 2>&1; then
+      summary "V2 Android context switch (on arm64 Linux) exit 0: $(tail -1 "$OUT/v2_fiber_android_path.txt")"
+    else
+      fail "V2 Android context switch FAILED: $(tail -1 "$OUT/v2_fiber_android_path.txt")"
+    fi
   else
     fail "V2 Android context switch build FAILED"
   fi
@@ -117,8 +126,8 @@ RUN="$ENGINE/$BUILD/ntr_run"
 if [ -x "$RUN" ] && "$RECOMP" --rom "$ROM" --config "$HERE/zpoc_config" --out "$Z/gen" --allow-unknown-rom > "$Z/recomp.log" 2>&1 \
    && "$CC_" "${MODFLAGS[@]}" -w -ffreestanding -fno-stack-protector -O1 -DNTR_GAME_MODULE=1 \
         -I "$ENGINE/runtime/include" -I "$Z/gen" "$Z"/gen/*.c -o "$MODULE" > "$Z/module_build.log" 2>&1; then
-  "$RUN" "$ROM" "$MODULE" "$FRAMES" "$Z/hashes_recomp_1.txt" > "$Z/run_1.log" 2>&1
-  "$RUN" "$ROM" "$MODULE" "$FRAMES" "$Z/hashes_recomp_2.txt" > "$Z/run_2.log" 2>&1
+  "$RUN" "$ROM" "$MODULE" "$FRAMES" "$Z/hashes_recomp_1.txt" > "$Z/run_1.log" 2>&1 || fail "cartridge: first run FAILED"
+  "$RUN" "$ROM" "$MODULE" "$FRAMES" "$Z/hashes_recomp_2.txt" > "$Z/run_2.log" 2>&1 || fail "cartridge: second run FAILED"
   summary "cartridge: $(tail -1 "$Z/run_1.log")"
   cmp -s "$Z/hashes_recomp_1.txt" "$Z/hashes_recomp_2.txt" && summary "cartridge: identical frame hashes twice" \
     || fail "cartridge: frame hashes DIFFER between two runs"

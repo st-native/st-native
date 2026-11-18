@@ -1,0 +1,70 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Source-only checks: no user ROMs, assets, saves or generated game modules.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard-and-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Game-data guard
+        run: python3 -I tools/check_no_game_data.py --tree .
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tests -t .
+
+  linux:
+    name: ${{ matrix.name }}
+    needs: guard-and-unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux-x64, os: ubuntu-24.04}
+          - {name: linux-arm64, os: ubuntu-24.04-arm}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      ST_NATIVE_BUILD_APP: "1"
+      CMAKE_BUILD_PARALLEL_LEVEL: "2"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ca-certificates git cmake clang lld \
+            ninja-build pkg-config python3 python3-venv xvfb xauth libx11-dev libxext-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxss-dev libxfixes-dev libxtst-dev libwayland-dev libxkbcommon-dev \
+            libegl-dev libgl-dev libdrm-dev libgbm-dev libasound2-dev libpulse-dev libudev-dev \
+            libdbus-1-dev libgl1-mesa-dri libglx-mesa0
+      - name: Build app/runtime, run C++ tests, fibers, difftests and synthetic cartridge
+        run: xvfb-run -a bash spike/m1a/run_posix.sh "$RUNNER_TEMP/st-native-ci" 600 "${{ matrix.name }}"
+      - name: Upload synthetic-test diagnostics
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: diagnostics-${{ matrix.name }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            spike/m1a/results/**/summary.txt
+            spike/m1a/results/**/versions.txt
+            spike/m1a/results/**/*.log
+            spike/m1a/results/**/v2_*.txt
+            spike/m1a/results/**/v3_*.txt

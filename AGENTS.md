@@ -16,7 +16,8 @@ and the ADRs in `docs/architecture/DECISIONS/` before changing code.
 - Copy code from repositories without a compatible licence (Shipwright, the Spirit Tracks D-Pad Patch) or of unknown
   provenance (Phantom Hourglass Recomp's embedded blow sample).
 - Push, publish, create repositories, accounts or releases, or change hosting settings (GitHub, GitLab). The
-  maintainer creates the GitLab.com account and publishes after reviewing the local bundle (docs/PUBLISHING.md).
+  maintainer creates the hosting account and authorizes publication after reviewing the local bundle
+  (docs/PUBLISHING.md). GitHub (`st-native/st-native`) is the primary host; GitLab is a retained backup.
 - Claim a test passed that was not run. Say what could not be tested and why.
 
 ## Always

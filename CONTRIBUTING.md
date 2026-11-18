@@ -1,6 +1,8 @@
 # Contributing
 
 This project is not public yet. These notes are for the first collaborators and will grow before publication.
+The primary repository is [st-native/st-native on GitHub](https://github.com/st-native/st-native).
+Use pull requests there; the previous GitLab repository is retained as a backup.
 
 Read first: [README.md](README.md), [docs/BUILDING.md](docs/BUILDING.md), [AGENTS.md](AGENTS.md) (it binds AI
 assistants and humans alike).
@@ -28,8 +30,8 @@ All of these use our own synthetic cartridge or generated data, never the game.
 
 | What | Command | Expected |
 |---|---|---|
-| Unit tests of the RE tools (BLZ codec round trips) | `.venv\Scripts\python -I -m unittest discover -s tests -t .` | `OK` (5 tests) |
-| The engine's unit tests, built with our programs and patches | `tools\build\build_program.cmd --tests` | 10 of 10 pass |
+| Python unit tests (codecs, discovery, cache and patch-stack checks) | `.venv\Scripts\python -I -m unittest discover -s tests -t .` | All applicable tests pass (12 tests, one skipped in the current Windows environment) |
+| The engine/app unit tests, built with our programs and patches | `tools\build\build_program.cmd --tests` | All configured tests pass (17 in the current Windows build) |
 | V2: the fiber context switch, against the engine's `fiber.cpp` | `spike\m1a\run_v2_windows.cmd` | transcript hash `be74b658` in Debug and Release |
 | V3: recompiled C against a reference ARM946 (Unicorn), 8,400 random instructions | `spike\m1a\run_v3_windows.cmd 300 1` and `… 300 2` | 0 mismatches |
 | The synthetic cartridge through the recompiler and runtime, 600 frames | `spike\m1a\run_zpoc_windows.cmd 600` | identical per-frame state hashes on every run, equal to `spike\m1a\fixtures\zpoc_hashes_windows_x64.txt` |
@@ -56,9 +58,9 @@ Each one is self-contained and needs no ROM unless marked.
 
 1. **T5: keep the rounding mode per fiber** on the Android context switch (save and restore FPCR in the assembly of
    patch 0003) and on macOS. Done when V2 gives `be74b658` on arm64 Linux with the Android path, and in CI on macOS.
-2. **Build `st_native` on Linux x64.** `app/st_program.cmake` already has the link group; `run_posix.sh` builds the
-   engine but not our program. Done when it builds and the synthetic-cartridge checks still pass. Then, with a ROM,
-   the scripted boot gives the same hashes as on Windows.
+2. **Validate `st_native` on Linux with a local ROM.** GitHub Actions sets `ST_NATIVE_BUILD_APP=1` to include the
+   CLI program and app tests in the Linux x64/arm64 build. Check those results, then verify that a local scripted
+   real-game boot gives the same hashes as on Windows. The launcher is still Windows-only. (ROM)
 3. **Reproducible module build on Linux** (`tools/build/st_build.py` is Windows-only today: clang-cl, lld-link,
    `.dll`). Use the engine's Linux module flags, and check two clean builds are identical. (ROM)
 4. **A function list that decrypts nothing, at dsd's level.** `st_build.py --functions ours` uses our extractor and

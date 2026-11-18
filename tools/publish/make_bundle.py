@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 INCLUDE = [
     "README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "LICENSE", "NOTICE.md", ".gitignore", ".gitattributes",
-    ".gitlab-ci.yml", "Launch.cmd",
+    ".github/workflows/", "Launch.cmd",
     "app/", "platform/windows/launcher.py", "platform/windows/launcher_worker.cpp",
     "platform/windows/launcher.rc", "platform/windows/launcher.ico",
     "game/st/config/", "game/st/hooks/",
@@ -92,7 +92,7 @@ def main() -> int:
     manifest = "".join(f"{hashlib.sha256((out / f).read_bytes()).hexdigest()}  {f}\n" for f in sorted(copied))
     (out.parent / "BUNDLE_MANIFEST.txt").write_text(manifest, encoding="utf-8", newline="\n")
     review = [
-        "# Publication bundle: review before creating the GitLab account or publishing\n\n",
+        "# Source publication bundle: review before uploading\n\n",
         f"Bundle: `{out}`, {len(copied)} files ({sum((out / f).stat().st_size for f in copied):,} bytes). SHA-256 of "
         "each: `BUNDLE_MANIFEST.txt`.\n\n",
         "## Game-data guard\n\n```\n" + (guard.stdout + guard.stderr).strip() + "\n```\n\n",
