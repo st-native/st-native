@@ -115,10 +115,21 @@ static void t4_entry_b(void*) {
 // ---- T5: the floating-point environment (rounding mode) belongs to each fiber -----------------------------------
 static Fiber* t5_fiber;
 static int t5_seen_mode = -1;
+#if defined(__aarch64__)
+static int t5_resumed_mode = -1;
+static int t5_resumed_flags = 0;
+#endif
 static void t5_entry(void*) {
     t5_seen_mode = std::fegetround();
     std::fesetround(FE_UPWARD);  // changed only inside this fiber
+#if defined(__aarch64__)
+    std::feraiseexcept(FE_INVALID);
+#endif
     fiber_switch(t5_fiber, g_main);
+#if defined(__aarch64__)
+    t5_resumed_mode = std::fegetround();
+    t5_resumed_flags = std::fetestexcept(FE_ALL_EXCEPT);
+#endif
     for (;;) fiber_switch(t5_fiber, g_main);
 }
 
@@ -180,13 +191,29 @@ int main() {
     fiber_destroy(t4_b);
 
     std::fesetround(FE_TONEAREST);
+    std::feclearexcept(FE_ALL_EXCEPT);
     t5_fiber = fiber_create(64 * 1024, t5_entry, nullptr);
     fiber_switch(g_main, t5_fiber);
     int main_mode = std::fegetround();
     log("T5 rounding mode: new fiber starts with %s; main after the fiber set upward: %s",
         round_mode_name(t5_seen_mode).c_str(), round_mode_name(main_mode).c_str());
     check(main_mode == FE_TONEAREST, "T5 rounding mode leaked from a fiber into main");
+    check(t5_seen_mode == FE_TONEAREST, "T5 new fiber did not inherit the rounding mode");
+#if defined(__aarch64__)
+    // Exercise both FPCR and FPSR, in both switch directions. Successful transcripts stay portable.
+    check((std::fetestexcept(FE_INVALID) & FE_INVALID) == 0, "T5 exception flag leaked into main");
+    std::fesetround(FE_DOWNWARD);
+    std::feraiseexcept(FE_DIVBYZERO);
+    fiber_switch(g_main, t5_fiber);
+    check(t5_resumed_mode == FE_UPWARD, "T5 resumed fiber lost its rounding mode");
+    check((t5_resumed_flags & (FE_INVALID | FE_DIVBYZERO)) == FE_INVALID,
+          "T5 resumed fiber lost or inherited exception flags");
+    check(std::fegetround() == FE_DOWNWARD, "T5 main lost its rounding mode on the second switch");
+    check((std::fetestexcept(FE_INVALID | FE_DIVBYZERO)) == FE_DIVBYZERO,
+          "T5 main lost or inherited exception flags on the second switch");
+#endif
     std::fesetround(FE_TONEAREST);
+    std::feclearexcept(FE_ALL_EXCEPT);
     fiber_destroy(t5_fiber);
 
     t6_a = fiber_create(64 * 1024, t6_entry_a, nullptr);

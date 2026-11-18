@@ -1,0 +1,64 @@
+Preserve the Android AArch64 fiber floating-point environment.
+
+Save/restore FPCR and FPSR alongside callee-saved registers, and inherit
+the creator environment when creating a fiber. Keeps the frame 16-byte aligned.
+Validated by V2 T5 rounding-mode and exception-flag isolation checks.
+Original Android port attribution in patch 0003 remains unchanged.
+
+--- a/runtime/src/fiber.cpp
++++ b/runtime/src/fiber.cpp
+@@ -54,7 +54,8 @@
+ // Ported from dguillot-gh/phantom-hourglass-recomp, commit db0d762 (2026-10-12, dguillot-gh), GPL-3.0:
+ // Phantom Hourglass Recomp's Android port of this file (st-native M1a, spike/m1a/patches/0003).
+ // Android's C library has no makecontext/swapcontext: a small context switch of our own. A suspended fiber's stack
+-// holds its callee-saved registers (AAPCS64: x19-x30, d8-d15); its stack pointer is all a Fiber keeps.
++// holds its callee-saved registers (AAPCS64: x19-x30, d8-d15) and FP environment (FPCR/FPSR).
++// Its stack pointer is all a Fiber keeps.
+ #include <cstdint>
+ 
+ extern "C" void ntr_fiber_swap(void** save_sp, void* new_sp);
+@@ -66,7 +67,7 @@
+     ".global ntr_fiber_swap\n"
+     ".type ntr_fiber_swap, %function\n"
+     "ntr_fiber_swap:\n"
+-    "  sub sp, sp, #160\n"
++    "  sub sp, sp, #176\n"
+     "  stp x19, x20, [sp, #0]\n"
+     "  stp x21, x22, [sp, #16]\n"
+     "  stp x23, x24, [sp, #32]\n"
+@@ -77,6 +78,9 @@
+     "  stp d10, d11, [sp, #112]\n"
+     "  stp d12, d13, [sp, #128]\n"
+     "  stp d14, d15, [sp, #144]\n"
++    "  mrs x2, fpcr\n"
++    "  mrs x3, fpsr\n"
++    "  stp x2, x3, [sp, #160]\n"
+     "  mov x2, sp\n"
+     "  str x2, [x0]\n"
+     "  mov sp, x1\n"
+@@ -90,7 +94,10 @@
+     "  ldp d10, d11, [sp, #112]\n"
+     "  ldp d12, d13, [sp, #128]\n"
+     "  ldp d14, d15, [sp, #144]\n"
+-    "  add sp, sp, #160\n"
++    "  ldp x2, x3, [sp, #160]\n"
++    "  msr fpcr, x2\n"
++    "  msr fpsr, x3\n"
++    "  add sp, sp, #176\n"
+     "  ret\n"
+     ".size ntr_fiber_swap, .-ntr_fiber_swap\n"
+     // A new fiber's first switch "returns" here with its Fiber in x19.
+@@ -131,8 +138,11 @@
+     if (!f->stack) std::abort();
+     // The first switch to it pops this frame: x19 = the Fiber, x29 = 0 (end of the frame chain), x30 = the start stub.
+     uintptr_t top = (reinterpret_cast<uintptr_t>(f->stack) + stack_size) & ~uintptr_t(15);
+-    uint64_t* frame = reinterpret_cast<uint64_t*>(top - 160);
+-    for (int i = 0; i < 20; i++) frame[i] = 0;
++    uint64_t* frame = reinterpret_cast<uint64_t*>(top - 176);
++    for (int i = 0; i < 22; i++) frame[i] = 0;
++    // Inherit the creator's floating-point environment, as getcontext does on the POSIX path.
++    __asm__ volatile("mrs %0, fpcr" : "=r"(frame[20]));
++    __asm__ volatile("mrs %0, fpsr" : "=r"(frame[21]));
+     frame[0] = reinterpret_cast<uint64_t>(f);                       // x19
+     frame[10] = 0;                                                   // x29
+     frame[11] = reinterpret_cast<uint64_t>(&ntr_fiber_start);       // x30

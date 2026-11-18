@@ -37,9 +37,10 @@ All of these use our own synthetic cartridge or generated data, never the game.
 | The synthetic cartridge through the recompiler and runtime, 600 frames | `spike\m1a\run_zpoc_windows.cmd 600` | identical per-frame state hashes on every run, equal to `spike\m1a\fixtures\zpoc_hashes_windows_x64.txt` |
 | The same on Linux or macOS | `bash spike/m1a/run_posix.sh` | as above; V2 on macOS fails check T5 (known, below) |
 
-**Known failure, left active on purpose: V2 check T5** (the rounding mode is not kept per fiber) fails on macOS and on
-the Android context switch. The engine never changes the rounding mode, so nothing depends on it today
-([M1A_SPIKE.md §3.8](docs/research/M1A_SPIKE.md)). Do not disable the check; a fix is welcome (first tasks, below).
+**V2 check T5:** patch 0021 preserves FPCR/FPSR on the Android AArch64 context switch. The ARM64 Linux CI job
+executes that same assembly path as well as the native POSIX path; T5 checks rounding-mode and exception-flag
+isolation in both switch directions. **Unknown:** validation on an Android device. The historical macOS T5
+failure remains open ([M1A_SPIKE.md §3.8](docs/research/M1A_SPIKE.md)); do not disable the check.
 
 **With your own ROM** (Windows x64): [docs/BUILDING.md](docs/BUILDING.md) §6 covers two clean module builds that
 must be identical, and the scripted boot to a new game (`tests/rom/boot_new_game.txt`) that must give identical
@@ -56,8 +57,8 @@ results as counts and hashes only.
 
 Each one is self-contained and needs no ROM unless marked.
 
-1. **T5: keep the rounding mode per fiber** on the Android context switch (save and restore FPCR in the assembly of
-   patch 0003) and on macOS. Done when V2 gives `be74b658` on arm64 Linux with the Android path, and in CI on macOS.
+1. **T5: keep the rounding mode per fiber on macOS.** The Android assembly fix is patch 0021; verify it on a real
+   Android device too. The macOS task is done when V2 gives `be74b658` in macOS CI with the check still active.
 2. **Validate `st_native` on Linux with a local ROM.** GitHub Actions sets `ST_NATIVE_BUILD_APP=1` to include the
    CLI program and app tests in the Linux x64/arm64 build. Check those results, then verify that a local scripted
    real-game boot gives the same hashes as on Windows. The launcher is still Windows-only. (ROM)

@@ -1,0 +1,18 @@
+Allow a bounded five minutes for the upstream UI smoke test.
+
+A cold GitHub ARM64 runner using Mesa software rendering exceeded the
+original 120-second limit; a diagnostic rerun completed all checkpoints.
+Retains the test script, assertions and failure propagation.
+
+--- a/tests/ui_smoke.cmake
++++ b/tests/ui_smoke.cmake
+@@ -9,7 +9,8 @@
+   RESULT_VARIABLE result
+   ERROR_VARIABLE err
+   OUTPUT_VARIABLE out
+-  TIMEOUT 120)
++  # Cold software-rendered CI runs can exceed 120 s; keep all assertions and a bounded timeout.
++  TIMEOUT 300)
+ if(err MATCHES "cannot open the game window|renderer could not start|SDL_Init failed")
+   message(STATUS "no display or OpenGL here: skipped")
+   return()

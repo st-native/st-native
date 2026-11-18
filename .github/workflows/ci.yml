@@ -41,6 +41,7 @@ jobs:
     env:
       ST_NATIVE_BUILD_APP: "1"
       CMAKE_BUILD_PARALLEL_LEVEL: "2"
+      SDL_AUDIODRIVER: dummy
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

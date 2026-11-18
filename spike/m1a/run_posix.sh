@@ -57,14 +57,14 @@ if "${CONFIGURE[@]}" > "$OUT/v1_configure.log" 2>&1 \
   summary "V1 build ok in $(( $(date +%s) - start )) s"
   (cd "$BUILD" && ctest --output-on-failure > "$OUT/v1_ctest.log" 2>&1) || fail "V1 ctest FAILED"
   summary "V1 ctest: $(grep -E 'tests passed|tests failed' "$OUT/v1_ctest.log")"
-  # ui_smoke has a fixed 120 s limit; on a slow software renderer, time the same run without it (slow or hung?)
+  # Keep the original failure; a longer diagnostic run distinguishes slow software rendering from a hang.
   if grep -q "ui_smoke (Failed)" "$OUT/v1_ctest.log"; then
     W="$WORK/ui_smoke_diag"; rm -rf "$W"; mkdir -p "$W"
     t0=$(date +%s)
     with_limit 900 "$BUILD/game/ffcc" --prelaunch --first-run --no-settings --data-dir "$W/data" \
       --ui-script tests/ui_smoke.txt --ui-shots "$W/shots" > "$OUT/ui_smoke_diag.log" 2>&1
     rc=$?
-    summary "V1 ui_smoke without the 120 s limit (900 s instead): exit $rc after $(( $(date +%s) - t0 )) s," \
+    summary "V1 ui_smoke diagnostic (900 s limit): exit $rc after $(( $(date +%s) - t0 )) s," \
       "$(ls "$W/shots" 2>/dev/null | wc -l | tr -d ' ') screenshots of the script's $(grep -c '^shot:' tests/ui_smoke.txt)"
   fi
 else

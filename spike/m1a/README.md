@@ -24,6 +24,8 @@ checks. Report: [docs/research/M1A_SPIKE.md](../../docs/research/M1A_SPIKE.md). 
 | `patches/0018-cinematic-frustum-span.patch` | generic explicit vertical frustum union and centered-perspective world policy; preserves legacy symmetric-camera defaults. Game profiles remain outside the engine |
 | `patches/0019-frame-foreground-planes.patch` | optional read-only software foreground planes for host composition; display-register queries can skip projection parsing. No extra render pass or game-specific policy |
 | `patches/0020-runtime-audio-and-mic.patch` | game-agnostic microphone callbacks through Host and optional SPU interpolation, applied at frame boundaries; device handling and virtual breath stay in the app |
+| `patches/0021-fiber-aarch64-fenv.patch` | preserves FPCR/FPSR and inherits the creator environment on Android AArch64 fibers; V2 checks rounding and exception flags in both directions, including the assembly path on Linux ARM64 |
+| `patches/0022-ui-smoke-software-timeout.patch` | allows a bounded 300 seconds for cold software-rendered CI UI smoke tests; keeps assertions and failure propagation |
 | `fixtures/zpoc_synthetic.rom`, `fixtures/zpoc_hashes_windows_x64.txt` | the synthetic cartridge as built on Windows (our own code; SHA-1 `faacbe28…`) and its 600 per-frame state hashes there, the cross-platform reference |
 | `run_posix.sh`, `run_linux.sh`, `run_android.sh` | Linux/macOS: everything (fetch, V1, V2, V3, cartridge vs the Windows reference); Android: NDK compile + link |
 | `ci/m1a.yml`, `ci/make_ci_repo.py` | the CI workflow and the script that assembles the private CI repository (only this folder) |
