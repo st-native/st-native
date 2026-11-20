@@ -115,7 +115,12 @@ and LLVM. Packaging the toolchain for a standalone distribution is part of [ADR-
 
 Developers can check the launcher at four sizes, verify scrolling and overlapping controls, and test file rejection
 with `st_launcher.exe --smoke-test`, without a ROM. Pass an existing output directory after `--smoke-test` to save
-previews of the empty launcher in desktop and narrow layouts. To exercise preparation and cache reuse directly, run
+previews of the empty launcher in desktop and narrow layouts, plus synthetic screen-composition fixtures.
+Run `python -I tests/check_screen_composition.py <that output directory>` to check real GL blending at 50/75/100%,
+atlas selection, orientation and 4:3 letterboxing. These captures contain only our generated colors, no ROM data.
+The `Map` tab controls the optional overlay for `Screens → Single screen`; hold M for a display-only upper-screen
+peek, and use F2 for the original arrangement. Existing preferences are preserved.
+To exercise preparation and cache reuse directly, run
 `.venv\Scripts\python -I platform\windows\launcher.py --rom "C:\path\to\your\Spirit Tracks.nds" --prepare-only`.
 Use `st_launcher.exe --game-smoke <rom>` to test module preparation or reuse, then open and close the pause menu
 with both shortcuts in windowed and fullscreen sessions and verify that the launcher redraws in the same window.
@@ -247,3 +252,8 @@ The current Windows alpha primes about 50 ms of source audio at startup and afte
 window when a new frame is ready. This handles short scheduling delays; sustained slow rendering can still starve
 audio. The extra single-screen camera remains a software pass. See [Frame pacing](design/FRAME_PACING.md) for measured
 limits, the numeric `--frame-profile`/`ST_NATIVE_FRAME_PROFILE` diagnostics and a reproducible comparison procedure.
+
+For microphone investigation, `--mic-profile build/<run>/microphone.csv` records per-frame callback counts,
+sample counts, peak and source state without recording audio. It distinguishes no reads from delivered silence;
+it does not certify that the game accepted a note. See
+[microphone diagnostics](design/CONTROLS_AND_MICROPHONE.md#66-numeric-microphone-diagnostics).

@@ -16,6 +16,11 @@ modernisations, higher internal resolution, widescreen, smoother motion without 
 
 ## Product track
 
+**Current PC delivery sequence (2026-11-19):** [PC_ALPHA_PLAN.md](design/PC_ALPHA_PLAN.md) tracks
+P1 Gage → P2 Fraaz → P3 reusable composition/input → P4 train and Zelda/Phantom → P5 developer alpha,
+with explicit completion checklists. P1 is active; current practice/boss-entry replays are partial evidence.
+This sequence advances M4/M5 and does not replace the full-campaign or platform release gates.
+
 ## M0 — Research and feasibility (this document set)
 
 | | |
@@ -94,6 +99,22 @@ Use frames rendered by the runtime from the player's ROM and draw the launcher c
 | Acceptance | M2's path completed with mouse only, controller only, and in every layout mode |
 
 ## M5 — Graphics and quality of life
+
+**Single-screen PC default gate (2026-11-18):** [SINGLE_SCREEN_COVERAGE.md](design/SINGLE_SCREEN_COVERAGE.md)
+is the current per-context register. Required information must be available automatically: an M peek or a manual
+return to both DS views does not complete a boss, duet or train adaptation. Unknown contexts keep both views in
+the development default. Promotion requires verified context entry/exit, PC composition/input, phase replays,
+human visual acceptance and a supported single-player campaign/side-content sweep. Current manual Single screen
+is not that default; existing scene profiles do not establish campaign-wide coverage.
+
+**2026-11-19:** our calibrated virtual breath now passes Gage's teaching and full duet with pointer-selected
+notes, restores the rails and returns control to Link (`tests/rom/gage_duet.txt`). All 17,241 guest state/RAM hashes,
+29 original-screen checkpoints and 58 foreground-plane checkpoints match with existing screen features off/on;
+source saves are unchanged. All 17 Windows C++ tests pass. Numeric mic diagnostics distinguish input delivery
+from accepted notes. [Survey and limits](design/FLUTE_AND_FRAAZ_SURVEY.md).
+
+Gage's PC composition/input acceptance, retry/interruptions, other duets and Fraaz's split-form phases remain open.
+Fraaz is reached through the reveal and first ordinary combat; no new automatic encounter profile is enabled.
 
 | | |
 |---|---|

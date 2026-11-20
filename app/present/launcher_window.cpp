@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "launcher_window.hpp"
 #include "cursor_interface.hpp"
+#include "gl_screen_compositor.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi_Platform_SDL.h>
@@ -46,6 +47,9 @@ struct LauncherWindow::State {
     st::ScreenLayout layout = st::ScreenLayout::focus;
     bool automatic_join = true, shared_scene = false, classic_override = false, cinematic = false;
     st::ScreenEnhancements enhancements;
+    st::SecondaryViewSettings secondary;
+    bool secondary_peek = false;
+    std::unique_ptr<st::GlScreenCompositor> compositor;
     mutable std::mutex audio_mutex;
     std::atomic<uint64_t> audio_revision{1};
     st::AudioSettings audio;
@@ -55,13 +59,17 @@ struct LauncherWindow::State {
 
     st::ScreenViews views(int width, int height) const {
         return st::screen_views(st::effective_screen_layout(layout, automatic_join, shared_scene, classic_override),
-                                width, height);
+                                width, height, secondary, secondary_peek);
     }
 
     bool create_game_target() {
         glGenTextures(1, &game_texture);
         glBindTexture(GL_TEXTURE_2D, game_texture);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kDsWidth, kTextureHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glGenFramebuffers(1, &game_framebuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, game_framebuffer);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, game_texture, 0);
@@ -90,6 +98,7 @@ struct LauncherWindow::State {
     }
 
     ~State() {
+        compositor.reset();
         if (game_framebuffer) glDeleteFramebuffers(1, &game_framebuffer);
         if (game_texture) glDeleteTextures(1, &game_texture);
         renderer.reset();
@@ -205,26 +214,22 @@ bool LauncherWindow::draw_game() {
     glClearColor(0.f, 0.f, 0.f, 1.f);
     glClear(GL_COLOR_BUFFER_BIT);
     if (!state_->game_framebuffer) return true;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, state_->game_framebuffer);
-    if (state_->show_cinematic()) {
-        const auto view = st::cinematic_view(width, height);
-        glBlitFramebuffer(0, kTextureHeight, kDsWidth, 2 * st::ds_screen_height,
-                          view.x, height - view.y - view.height, view.x + view.width, height - view.y,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-        return true;
+    if (!state_->compositor) {
+        state_->compositor = std::make_unique<st::GlScreenCompositor>();
+        if (!state_->compositor->create()) { state_->compositor.reset(); return false; }
     }
-    const auto views = state_->views(width, height);
-    const auto blit = [height](const st::ScreenRect& view, int source_y) {
-        if (view.width <= 0 || view.height <= 0) return;
-        // The CPU pixels are top-down. Flip each screen while copying it.
-        glBlitFramebuffer(0, source_y + st::ds_screen_height, kDsWidth, source_y,
-                          view.x, height - view.y - view.height, view.x + view.width, height - view.y,
-                          GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    };
-    blit(views.touch, st::ds_screen_height);
-    blit(views.top, 0);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    auto& compositor = *state_->compositor;
+    compositor.begin(state_->game_texture, width, height);
+    if (state_->show_cinematic() && !state_->secondary_peek) {
+        compositor.draw(st::cinematic_view(width, height), 2);
+    } else {
+        const auto views = state_->views(width, height);
+        compositor.draw(views.touch, 1);
+        const bool overlay = state_->layout == st::ScreenLayout::single && !state_->secondary_peek &&
+            !state_->classic_override && !(state_->automatic_join && state_->shared_scene);
+        compositor.draw(views.top, 0, overlay ? state_->secondary.opacity : 100);
+    }
+    compositor.end();
     return true;
 }
 
@@ -255,7 +260,7 @@ bool LauncherWindow::game_coordinates(float& x, float& y, bool captured) const {
         !SDL_GetWindowSizeInPixels(window(), &pixels_w, &pixels_h)) return false;
     x *= float(pixels_w) / width;
     y *= float(pixels_h) / height;
-    if (state_->show_cinematic()) {
+    if (state_->show_cinematic() && !state_->secondary_peek) {
         return st::to_touch({{}, st::cinematic_view(pixels_w, pixels_h)}, x, y, captured);
     }
     return st::to_touch(state_->views(pixels_w, pixels_h), x, y, captured);
@@ -266,9 +271,24 @@ void LauncherWindow::set_screen_layout(st::ScreenLayout layout, bool automatic_j
     state_->automatic_join = automatic_join;
     state_->enhancements = enhancements;
     state_->classic_override = false;
+    state_->secondary_peek = false;
+}
+
+void LauncherWindow::set_secondary_view(st::SecondaryViewSettings settings) {
+    if (!st::valid_secondary_size(settings.size)) settings.size = 0;
+    if (!st::valid_secondary_opacity(settings.opacity)) settings.opacity = 75;
+    state_->secondary = settings;
+}
+
+void LauncherWindow::peek_secondary(bool held) { state_->secondary_peek = held; }
+
+bool LauncherWindow::save_game_preview(const char* path) {
+    int width = 0, height = 0;
+    return draw_game() && SDL_GetWindowSizeInPixels(window(), &width, &height) && save_preview(width, height, path);
 }
 
 void LauncherWindow::toggle_classic_layout() {
+    state_->secondary_peek = false;
     state_->classic_override = !state_->classic_override;
 }
 

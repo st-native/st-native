@@ -24,6 +24,9 @@ public:
     bool game_coordinates(float& x, float& y, bool captured) const override;
     void set_screen_layout(st::ScreenLayout layout, bool automatic_join, st::ScreenEnhancements enhancements = {}) override;
     void toggle_classic_layout() override;
+    void set_secondary_view(st::SecondaryViewSettings settings) override;
+    void peek_secondary(bool held) override;
+    bool save_game_preview(const char* path);
     uint64_t audio_revision() const override;
     st::AudioSettings audio_settings() const override;
     void set_audio_settings(const st::AudioSettings& audio) override;

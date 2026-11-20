@@ -30,7 +30,7 @@ All of these use our own synthetic cartridge or generated data, never the game.
 
 | What | Command | Expected |
 |---|---|---|
-| Python unit tests (codecs, discovery, cache and patch-stack checks) | `.venv\Scripts\python -I -m unittest discover -s tests -t .` | All applicable tests pass (12 tests, one skipped in the current Windows environment) |
+| Python unit tests (codecs, discovery, cache, patch stack and checkpoint-survey safety) | `.venv\Scripts\python -I -m unittest discover -s tests -t .` | All applicable tests pass (15 configured tests) |
 | The engine/app unit tests, built with our programs and patches | `tools\build\build_program.cmd --tests` | All configured tests pass (17 in the current Windows build) |
 | V2: the fiber context switch, against the engine's `fiber.cpp` | `spike\m1a\run_v2_windows.cmd` | transcript hash `be74b658` in Debug and Release |
 | V3: recompiled C against a reference ARM946 (Unicorn), 8,400 random instructions | `spike\m1a\run_v3_windows.cmd 300 1` and `… 300 2` | 0 mismatches |
@@ -73,6 +73,9 @@ Each one is self-contained and needs no ROM unless marked.
 5. **Retire the probe-word warnings** ("overlay ov026 cannot be told apart from ov023/ov031"). Find out from the
    recompiler's choice of words whether these overlays are interchangeable at run time, or whether a call could reach
    the wrong one. (ROM: report addresses only)
-6. **A presentation option:** screens side by side, or a gap between them, in `app/st_native.cpp`, following
-   [docs/design/DUAL_SCREEN_UX.md](docs/design/DUAL_SCREEN_UX.md).
+6. **PC presentation:** follow the current task and completion checklists in
+   [docs/design/PC_ALPHA_PLAN.md](docs/design/PC_ALPHA_PLAN.md). Gage's complete interaction is first, then Fraaz;
+   reachability, layout implementation and visual/input acceptance are separate results. Existing layout modes
+   are in `app/present/`; requirements and unresolved contexts are in
+   [docs/design/SINGLE_SCREEN_COVERAGE.md](docs/design/SINGLE_SCREEN_COVERAGE.md).
 7. **Gamepad check:** the mapping in `app/st_native.cpp` is untested on real controllers. Report which ones work.

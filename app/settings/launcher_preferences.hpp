@@ -17,6 +17,7 @@
 namespace st {
 
 inline constexpr std::array kLayoutOptions{
+    std::pair{ScreenLayout::single, "single"},
     std::pair{ScreenLayout::focus, "focus"}, std::pair{ScreenLayout::classic, "classic"},
     std::pair{ScreenLayout::side_by_side, "side-by-side"}, std::pair{ScreenLayout::picture_in_picture, "pip"},
 };
@@ -39,6 +40,7 @@ struct LauncherPreferences {
     bool automatic_join = true;
     bool pause_on_menu = false;
     ScreenEnhancements enhancements;
+    SecondaryViewSettings secondary;
     AudioSettings audio;
 
     explicit LauncherPreferences(const std::filesystem::path& path) {
@@ -58,6 +60,10 @@ struct LauncherPreferences {
                 if (entry >> cutscenes >> subtitles >> hide &&
                     (cutscenes == 0 || cutscenes == 1) && (subtitles == 0 || subtitles == 1) && (hide == 0 || hide == 1))
                     enhancements = {cutscenes != 0, subtitles != 0, hide != 0};
+            } else if (version == "secondary-view-v1") {
+                int size = 0, opacity = 75;
+                if (entry >> size >> opacity && valid_secondary_size(size) && valid_secondary_opacity(opacity))
+                    secondary = {size, opacity};
             } else if (version == "audio-v1") {
                 int volume = 100, mute = 0, mic_gain = 100;
                 std::string interp_key, mic_key, out_dev, in_dev;
@@ -92,6 +98,8 @@ struct LauncherPreferences {
              << clamp_mic_gain(audio.mic_gain) << ' ' << std::quoted(audio.output_device) << ' '
              << std::quoted(audio.input_device) << '\n'
              << "menu-v1 " << pause_on_menu << '\n';
+        file << "secondary-view-v1 " << (valid_secondary_size(secondary.size) ? secondary.size : 0) << ' '
+             << (valid_secondary_opacity(secondary.opacity) ? secondary.opacity : 75) << '\n';
         file.close();
         if (!file) return false;
         std::error_code error;

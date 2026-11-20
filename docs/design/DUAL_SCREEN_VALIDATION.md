@@ -29,7 +29,8 @@ the projection difference; they do not by themselves prove matching world-space 
 **Verified:** downloaded HelpTheWretched's
 [Start-to-Finish Zelda saves for DS/3DS/Wii](https://gbatemp.net/download/start-to-finish-zelda-saves-for-ds-3ds-wii.37279/),
 and extracted only the Spirit Tracks subset locally. The catalogue describes 23 save files with two slots each,
-covering 46 checkpoints. **Only the four files above were loaded in this survey; the other checkpoints are untested.**
+covering 46 checkpoints. **The initial cinematic survey loaded only the four files above.** The later read-only
+bootstrap below adds starting points; it does not establish that their encounters were reached or adapted.
 The story labels come from the author's catalogue. No save, archive, catalogue text, screenshot or game-derived log
 is included in this repository. Local source URLs and archive digests are recorded under ignored `build/`.
 
@@ -39,6 +40,10 @@ is included in this repository. Local source URLs and archive digests are record
 | `tests/rom/cinematic_tower_after_byrne.txt` | Saves18 | 1 |
 | `tests/rom/cinematic_cragma_approach.txt` | Saves16 | 1 |
 | `tests/rom/cinematic_skeldritch_approach.txt` | Saves20 | 1 |
+| `tests/rom/gage_practice.txt` | Saves03 | 2 |
+| `tests/rom/gage_teaching.txt` | Saves03 | 2 |
+| `tests/rom/gage_duet.txt` | Saves03 | 2 |
+| `tests/rom/fraaz_boss_entry.txt` | Saves08 | 2 |
 
 These scripts contain only our timed button/stylus inputs. Copy the required save to an ignored local directory;
 always use `--read-only-save`. Do not combine it with `--no-save`, which starts from blank memory. Do not overwrite
@@ -154,3 +159,82 @@ correctness runs do not measure real-time audio or frame pacing. Other platforms
 
 Do not call this a universal or lossless join. The current extra camera is a 256×192 reframing, and some scenes may
 use independent cameras or 2D art requiring a different policy.
+
+## Campaign checkpoint bootstrap (2026-11-18)
+
+The current context-by-context requirements and acceptance gates are in
+[SINGLE_SCREEN_COVERAGE.md](SINGLE_SCREEN_COVERAGE.md). A later survey ran twelve additional save/slot pairs for
+3,000 frames each, read-only, without movement, attacks or assumed encounter success. Every process exited 0 and
+every source save remained byte-identical. This establishes repeatable starting points, not boss/duet acceptance.
+
+| Candidate | Save / slot | Local evidence |
+|---|---|---|
+| FL02 Gage | Saves03 / 2 | Boot only |
+| BO01 Stagnox | Saves04 / 2 | Boot only |
+| FL03 Steem | Saves07 / 2 | Boot only |
+| BO02 Fraaz | Saves08 / 2 | Boot only |
+| TR06 Carben rescue | Saves11 / 1 | Boot only |
+| FL04 Carben duet | Saves11 / 2 | Boot only |
+| BO03 Phytops | Saves12 / 2 | Boot only |
+| FL05 Embrose | Saves14 / 2 | Boot only |
+| BO05 Byrne | Saves17 / 2 | Boot only |
+| FL06 Rael | Saves18 / 2 | Boot only |
+| TR08 Demon Train | Saves23 / 1 | Boot only; display swap set throughout frames 2,000–3,000 |
+| BO08/FL07 finale | Saves23 / 2 | Boot only; display swap set throughout frames 2,000–3,000 |
+
+The post-load windows recorded no capture/off-axis pair and matched no existing automatic scene profile.
+This does not imply that their upper screens are unnecessary. With the earlier four scene checkpoints, the
+documented work has exercised 16 distinct save/slot pairs across 13 files, at different evidence levels.
+
+To reproduce a checkpoint bootstrap on Windows, using your own local files and a new output directory:
+
+```powershell
+.venv\Scripts\python -I tools\testing\checkpoint_survey.py `
+  --rom "<your-ROM.nds>" --module "<your-local-st_game.dll>" `
+  --saves "<local-spirit-tracks-save-collection>" `
+  --case FL02:3:2 --case BO02:8:2 --out build\coverage-bootstrap-01
+```
+
+The helper requires existing local files, uses `--read-only-save`, checks source digests before/after, refuses to
+overwrite a nonempty output directory, and confines outputs to this checkout's ignored `build/`. It records dense
+graphics metadata and guest hashes, without requesting screenshots or protected-code tracing. Every report keeps
+`encounter_confirmed=false` and `presentation_accepted=false`; a successful load cannot promote either claim.
+Raw logs and save content are never part of the publication bundle.
+
+**Verified helper checks:** Python reports 15 tests, one skipped, no failures, including output containment, preservation of existing
+results, case/slot validation and rejection of non-dense metadata. The published helper was then run sequentially
+for FL02 and BO02: both 3,000-frame bootstraps passed and the source saves were unchanged. The initial exploratory
+FL02 sequence did not establish the actual duet. Subsequent recorded navigation reached practice and the Fraaz
+arena as detailed below; neither full encounter is accepted. No new automatic scene
+profile is enabled by this survey. The launcher identifies manual Single screen as incomplete in both settings
+menus; the Windows build, all 17 C++ tests, launcher UI smoke and synthetic framebuffer checks pass.
+
+## Gage duet and Fraaz entry (2026-11-19)
+
+The [bounded encounter survey](FLUTE_AND_FRAAZ_SURVEY.md) adds own-input replays beyond the earlier bootstraps.
+Gage's teaching, free practice/Back, all three duet turns, joint performance, rail reward and resumed walking are reached.
+Fraaz's warp route, reveal and first ordinary combat are reached; split forms and fight completion remain open.
+These are **Reached**, not Implemented or Accepted, in the campaign register. No new automatic rule is enabled.
+
+**Verified:** Fraaz's 6,511-frame off/on replays have identical state/RAM hashes and interpreter totals
+(1,990,039 instructions each). All 7 original dual-screen checkpoints agree, the source save is unchanged,
+and no existing automatic profile or display capture is active from frame 3,000 through 6,511.
+These headless runs do not measure real-time audio/frame pacing or approve a new PC composition.
+
+**Historical, before virtual-breath calibration:** Gage's 8,781-frame off/on replays have identical state/RAM hashes and interpreter totals
+(1,901,261 instructions each). All 8 original dual-screen checkpoints agree and the final practice checkpoint
+matches the interactive exploration. The source save is unchanged. No existing automatic profile or display
+capture is active from frame 3,000 through 8,781. This old run did not pass teaching.
+
+**Verified with the calibrated source:** `gage_teaching.txt` passes teaching, exposes free-practice Back and returns
+to Gage's dialogue. All 10,484 state/RAM hashes match off/on (2,202,676 interpreter instructions each).
+Compared with the former weak-signal baseline, all first 8,461 frames match; the first intentional difference
+occurs at frame 8,463 after virtual breath begins. No guest function, hook or protection routine was changed.
+
+**Verified full duet:** `gage_duet.txt` replays 17,241 frames through successful completion and resumed walking.
+All state/RAM hashes match off/on, with 3,595,601 interpreter instructions each. All 29 original dual-screen
+checkpoints and 58 foreground-plane checkpoints match; nine success/reward/world-return checkpoints also match
+the successful interactive recording. Both source-save hashes are unchanged. The virtual input is silent from
+frame 13,000 through the end. No current automatic screen profile is active after loading at frame 3,000.
+This validates the native gameplay route and presentation isolation, not a new one-canvas flute composition,
+retry after failure, other duets, real-mic behavior or real-time audio/frame pacing.

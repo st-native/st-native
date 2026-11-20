@@ -23,6 +23,7 @@ int main() {
         original.automatic_join = mask % 2 != 0;
         original.pause_on_menu = (mask & 2) != 0;
         original.enhancements = {bool(mask & 1), bool(mask & 2), bool(mask & 4)};
+        original.secondary = {mask % 2 ? 20 : 30, mask % 2 ? 50 : 100};
         original.audio = {
             int(mask * 10),
             (mask & 1) != 0,
@@ -36,7 +37,8 @@ int main() {
         st::LauncherPreferences loaded(path);
         if (loaded.layout != original.layout || loaded.enhancements != original.enhancements ||
             loaded.automatic_join != original.automatic_join || loaded.rom != original.rom ||
-            loaded.audio != original.audio || loaded.pause_on_menu != original.pause_on_menu) return 4;
+            loaded.audio != original.audio || loaded.pause_on_menu != original.pause_on_menu ||
+            loaded.secondary != original.secondary) return 4;
         for (auto feature : {st::ScreenFeature::cutscenes, st::ScreenFeature::subtitles, st::ScreenFeature::hide_secondary})
             if (st::screen_feature_enabled(loaded.enhancements.mask(), feature) != bool(mask & unsigned(feature))) return 5;
     }
@@ -51,12 +53,16 @@ int main() {
              "audio-v1 80 0 linear real 250 \"\" \"\"",
              "menu-v1",
              "menu-v1 2",
+             "secondary-view-v1 40 75",
+             "secondary-view-v1 20 25",
+             "secondary-view-v1 20",
          }) {
         { std::ofstream file(path); file << base << "pip\nmanual\n" << extension; }
         st::LauncherPreferences damaged(path);
         if (damaged.automatic_join || damaged.enhancements.mask() != 7 ||
             damaged.layout != st::ScreenLayout::picture_in_picture ||
-            damaged.audio != st::AudioSettings{} || damaged.pause_on_menu) return 6;
+            damaged.audio != st::AudioSettings{} || damaged.pause_on_menu ||
+            damaged.secondary != st::SecondaryViewSettings{}) return 6;
     }
     return 0;
 }

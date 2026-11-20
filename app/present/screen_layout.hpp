@@ -7,7 +7,17 @@ namespace st {
 
 inline constexpr int ds_width = 256, ds_screen_height = 192;
 
-enum class ScreenLayout { focus, classic, side_by_side, picture_in_picture };
+enum class ScreenLayout { focus, classic, side_by_side, picture_in_picture, single };
+
+// Applies only to the optional secondary view in Single screen. Percentages are of the main view's width.
+struct SecondaryViewSettings {
+    int size = 0;  // Hidden, 20%, 30%
+    int opacity = 75;
+    constexpr bool operator==(const SecondaryViewSettings&) const = default;
+};
+
+constexpr bool valid_secondary_size(int value) { return value == 0 || value == 20 || value == 30; }
+constexpr bool valid_secondary_opacity(int value) { return value == 50 || value == 75 || value == 100; }
 
 constexpr ScreenLayout effective_screen_layout(ScreenLayout selected, bool automatic, bool shared_scene, bool invert) {
     return ((automatic && shared_scene) != invert) ? ScreenLayout::classic : selected;
@@ -39,13 +49,23 @@ constexpr ScreenSize initial_screen_size(ScreenLayout layout) {
     case ScreenLayout::side_by_side: return {2 * ds_width, ds_screen_height};
     case ScreenLayout::focus: return {ds_width + ds_width / 2 + 8, ds_screen_height};
     case ScreenLayout::picture_in_picture: return {ds_width, ds_screen_height};
+    case ScreenLayout::single: return {ds_width, ds_screen_height};
     }
     return {ds_width, 2 * ds_screen_height};
 }
 
 // Use exact 4:3 tiles and center the complete arrangement in drawable pixels.
-constexpr ScreenViews screen_views(ScreenLayout layout, int width, int height) {
+constexpr ScreenViews screen_views(ScreenLayout layout, int width, int height,
+                                   SecondaryViewSettings secondary = {}, bool peek = false) {
     if (width <= 0 || height <= 0) return {};
+    if (peek) return {cinematic_view(width, height), {}};
+    if (layout == ScreenLayout::single) {
+        const auto touch = cinematic_view(width, height);
+        if (!valid_secondary_size(secondary.size) || secondary.size == 0) return {{}, touch};
+        const int unit = touch.width * secondary.size / 400;
+        const int margin = std::max(2, touch.width / 64);
+        return {{touch.x + touch.width - 4 * unit - margin, touch.y + margin, 4 * unit, 3 * unit}, touch};
+    }
     if (layout == ScreenLayout::focus && width >= height) {
         const int gap = std::max(6, height / 32);
         const int unit = std::min((width - gap) / 12, height / 6);

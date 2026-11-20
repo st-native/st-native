@@ -1,0 +1,27 @@
+# Our own recorded input data. No save, game assets or generated code is included.
+# Scope: Fraaz warp, reveal and first ordinary combat; no split phase.
+# Requires a LOCAL COPY of HelpTheWretched's collection, Saves08, slot 2.
+# Use --save <local-copy.sav> --read-only-save and the ours + original module.
+# See docs/design/FLUTE_AND_FRAAZ_SURVEY.md for evidence, limits and reproduction.
+# Screenshots are private and written only when --shots points below ignored build/.
+# This is a reachability regression, not acceptance of an automatic PC presentation.
+1000 press START 6
+1100 touch 128 120 6
+1300 touch 130 110 6
+1500 touch 128 118 6
+1700 touch 130 91 6
+3000 shot loaded
+3001 touch 220 95 35
+3061 touch 20 95 35
+3930 shot floor_three
+3931 touch 80 6 180
+4230 shot arena_entry
+4231 touch 128 6 100
+4830 shot reveal
+5430 shot title
+6031 press START 6
+6211 press A 4
+6390 shot intro_end
+6391 press A 4
+6510 shot combat_entry
+6511 quit

@@ -130,6 +130,8 @@ void MicSource::on_stop() {
 size_t MicSource::on_read(int16_t* samples, size_t max_samples) {
     if (!samples || max_samples == 0) return 0;
     std::lock_guard lock(mutex_);
+    ++diagnostic_reads_;
+    diagnostic_samples_ += max_samples;
     if (!game_listening_ || paused_ || settings_.mic_mode == MicMode::off) {
         std::fill_n(samples, max_samples, int16_t(0));
         return max_samples;
@@ -156,6 +158,7 @@ size_t MicSource::on_read(int16_t* samples, size_t max_samples) {
     for (size_t i = 0; i < max_samples; ++i) {
         const int32_t mag = std::abs(int32_t(samples[i]));
         if (mag > session_peak_) session_peak_ = mag;
+        diagnostic_peak_ = std::max(diagnostic_peak_, mag);
     }
     return max_samples;
 }
@@ -163,6 +166,15 @@ size_t MicSource::on_read(int16_t* samples, size_t max_samples) {
 bool MicSource::device_open() const {
     std::lock_guard lock(mutex_);
     return backend_ && backend_->is_open();
+}
+
+MicReadDiagnostics MicSource::take_read_diagnostics() {
+    std::lock_guard lock(mutex_);
+    const MicReadDiagnostics result{diagnostic_reads_, diagnostic_samples_, diagnostic_peak_,
+                                    game_listening_, paused_, blowing_.load()};
+    diagnostic_reads_ = diagnostic_samples_ = 0;
+    diagnostic_peak_ = 0;
+    return result;
 }
 
 void MicSource::open_session_locked() {

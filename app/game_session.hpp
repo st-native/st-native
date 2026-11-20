@@ -24,6 +24,7 @@ struct GameLaunch {
     ScreenEnhancements enhancements;
     AudioSettings audio;
     bool pause_on_menu = false;
+    SecondaryViewSettings secondary;
 };
 
 struct GameResult {
@@ -43,6 +44,8 @@ public:
     virtual bool game_coordinates(float& x, float& y, bool captured) const = 0;
     virtual void set_screen_layout(ScreenLayout layout, bool automatic_join, ScreenEnhancements enhancements = {}) = 0;
     virtual void toggle_classic_layout() = 0;
+    virtual void set_secondary_view(SecondaryViewSettings settings) = 0;
+    virtual void peek_secondary(bool held) = 0;
     virtual uint64_t audio_revision() const = 0;
     virtual AudioSettings audio_settings() const = 0;
     virtual void set_audio_settings(const AudioSettings& audio) = 0;

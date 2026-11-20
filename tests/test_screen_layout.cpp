@@ -25,6 +25,27 @@ int main() {
         if (!st::to_touch({{}, view}, x, y, false) || x != 128.f || y < 172.f || y > 173.f) return 10;
         x = float(view.x - 1); y = float(view.y);
         if (st::to_touch({{}, view}, x, y, false)) return 11;
+        for (const int size : {0, 20, 30}) {
+            const auto single = st::screen_views(ScreenLayout::single, width, height, {size, 50});
+            if (single.touch.x != view.x || single.touch.y != view.y || single.touch.width != view.width ||
+                single.touch.height != view.height) return 12;
+            if (size == 0) {
+                if (single.top.width || single.top.height) return 13;
+            } else {
+                if (single.top.width * 3 != single.top.height * 4 ||
+                    single.top.width > single.touch.width * size / 100 ||
+                    !single.touch.contains(float(single.top.x), float(single.top.y)) ||
+                    !single.touch.contains(float(single.top.x + single.top.width - 1),
+                                           float(single.top.y + single.top.height - 1))) return 14;
+                x = single.top.x + single.top.width / 2.f;
+                y = single.top.y + single.top.height / 2.f;
+                if (st::to_touch(single, x, y, false) || !st::to_touch(single, x, y, true)) return 15;
+            }
+            const auto peek = st::screen_views(ScreenLayout::single, width, height, {size, 75}, true);
+            x = width / 2.f; y = height / 2.f;
+            if (peek.touch.width || peek.top.width != view.width || st::to_touch(peek, x, y, false) ||
+                st::to_touch(peek, x, y, true)) return 16;
+        }
     }
     constexpr std::array layouts{ScreenLayout::focus, ScreenLayout::classic, ScreenLayout::side_by_side,
                                  ScreenLayout::picture_in_picture};

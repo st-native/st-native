@@ -45,6 +45,25 @@ using Preferences = st::LauncherPreferences;
 
 constexpr std::array kEnhancementIds{"unify-cutscenes", "narrative-subtitles", "hide-secondary"};
 
+st::SecondaryViewSettings read_secondary_view(Rml::ElementDocument& document) {
+    auto get = [&](const char* id) {
+        return static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).GetValue();
+    };
+    return {std::atoi(get("secondary-size").c_str()), std::atoi(get("secondary-opacity").c_str())};
+}
+
+void show_secondary_view(Rml::ElementDocument& document, st::SecondaryViewSettings settings) {
+    static_cast<Rml::ElementFormControl&>(*document.GetElementById("secondary-size")).SetValue(std::to_string(settings.size));
+    static_cast<Rml::ElementFormControl&>(*document.GetElementById("secondary-opacity")).SetValue(std::to_string(settings.opacity));
+}
+
+void enable_secondary_view(Rml::ElementDocument& document, st::ScreenLayout layout, st::SecondaryViewSettings settings) {
+    document.GetElementById("single-screen-note")->SetProperty("display", layout == st::ScreenLayout::single ? "block" : "none");
+    static_cast<Rml::ElementFormControl&>(*document.GetElementById("secondary-size")).SetDisabled(layout != st::ScreenLayout::single);
+    static_cast<Rml::ElementFormControl&>(*document.GetElementById("secondary-opacity")).SetDisabled(
+        layout != st::ScreenLayout::single || settings.size == 0);
+}
+
 st::ScreenEnhancements read_enhancements(Rml::ElementDocument& document) {
     auto on = [&](const char* id) {
         return static_cast<Rml::ElementFormControl&>(*document.GetElementById(id)).GetValue() != "off";
@@ -136,7 +155,7 @@ st::AudioSettings read_audio_settings(Rml::ElementDocument& document) {
 
 bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) {
     if (!id.starts_with("tab-") || !document.GetElementById(id)) return false;
-    for (const std::string key : {"screens", "features", "audio", "window", "game"}) {
+    for (const std::string key : {"screens", "map", "features", "audio", "window", "game"}) {
         auto* tab = document.GetElementById("tab-" + key);
         if (!tab) continue;
         const bool selected = id == tab->GetId();
@@ -161,6 +180,8 @@ public:
         control("screen-layout").SetValue(layout_value(prefs_.layout));
         control("auto-join").SetValue(prefs_.automatic_join ? "automatic" : "manual");
         show_enhancements(document_, prefs_.enhancements);
+        show_secondary_view(document_, prefs_.secondary);
+        enable_secondary_view(document_, prefs_.layout, prefs_.secondary);
         populate_audio_devices(document_, prefs_.audio);
         show_audio_settings(document_, prefs_.audio);
         syncing_ = false;
@@ -187,6 +208,8 @@ public:
             prefs_.layout = parse_screen_layout(control("screen-layout").GetValue());
             prefs_.automatic_join = control("auto-join").GetValue() != "manual";
             prefs_.enhancements = read_enhancements(document_);
+            prefs_.secondary = read_secondary_view(document_);
+            enable_secondary_view(document_, prefs_.layout, prefs_.secondary);
             prefs_.audio = read_audio_settings(document_);
             update_audio_labels(document_, prefs_.audio);
             persist();
@@ -259,7 +282,7 @@ public:
             ready_ = st::GameLaunch{path_from_utf8(prefs_.rom), module, language,
                                     prefs_.scale[0] - '0', prefs_.window == "fullscreen", prefs_.layout,
                                     prefs_.automatic_join, prefs_.enhancements, prefs_.audio,
-                                    prefs_.pause_on_menu};
+                                    prefs_.pause_on_menu, prefs_.secondary};
         } else if (action_ == Action::play && result == 0) {
             show_status("Preparation did not return a game module.", true);
         }
@@ -278,6 +301,15 @@ public:
     bool automatic_join() const { return prefs_.automatic_join; }
     bool pause_on_menu() const { return prefs_.pause_on_menu; }
     st::ScreenEnhancements screen_enhancements() const { return prefs_.enhancements; }
+    st::SecondaryViewSettings secondary_view() const { return prefs_.secondary; }
+    void save_secondary_view(st::SecondaryViewSettings settings) {
+        syncing_ = true;
+        prefs_.secondary = settings;
+        show_secondary_view(document_, settings);
+        enable_secondary_view(document_, prefs_.layout, settings);
+        syncing_ = false;
+        persist();
+    }
     const st::AudioSettings& audio_settings() const { return prefs_.audio; }
     void save_pause_on_menu(bool pause) {
         syncing_ = true;
@@ -303,6 +335,7 @@ public:
         prefs_.layout = layout;
         prefs_.automatic_join = automatic_join;
         prefs_.enhancements = enhancements;
+        enable_secondary_view(document_, layout, prefs_.secondary);
         persist();
         update_buttons();
     }
@@ -565,6 +598,8 @@ public:
         control("auto-join").SetValue(launcher_.automatic_join() ? "automatic" : "manual");
         show_enhancements(document_, launcher_.screen_enhancements());
         enable_enhancements(document_, launcher_.automatic_join());
+        show_secondary_view(document_, launcher_.secondary_view());
+        enable_secondary_view(document_, launcher_.screen_layout(), launcher_.secondary_view());
         populate_audio_devices(document_, launcher_.audio_settings());
         show_audio_settings(document_, launcher_.audio_settings());
         enable_audio_controls(document_, true, launcher_.audio_settings().mic_mode);
@@ -613,6 +648,8 @@ private:
                 const bool automatic_join = control("auto-join").GetValue() != "manual";
                 const auto enhancements = read_enhancements(document_);
                 const auto audio = read_audio_settings(document_);
+                const auto secondary = read_secondary_view(document_);
+                enable_secondary_view(document_, layout, secondary);
                 enable_enhancements(document_, automatic_join);
                 update_audio_labels(document_, audio);
                 enable_audio_controls(document_, true, audio.mic_mode);
@@ -624,6 +661,10 @@ private:
                 if (audio != launcher_.audio_settings()) {
                     window_.set_audio_settings(audio);
                     launcher_.save_audio_settings(audio);
+                }
+                if (secondary != launcher_.secondary_view()) {
+                    window_.set_secondary_view(secondary);
+                    launcher_.save_secondary_view(secondary);
                 }
             }
             return;
@@ -672,11 +713,11 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
         return Rect{start.x, start.y, start.x + size.x, start.y + size.y};
     };
     constexpr std::array ids{"mark", "game-heading", "rom", "browse", "status", "play", "settings-heading",
-                             "tab-screens", "tab-features", "tab-audio", "tab-window", "tab-game",
+                             "tab-screens", "tab-map", "tab-features", "tab-audio", "tab-window", "tab-game",
                              "unify-cutscenes", "narrative-subtitles", "hide-secondary",
                              "master-volume", "master-volume-value", "mute-unfocused", "audio-interp",
                              "output-device", "mic-mode", "input-device", "mic-gain", "mic-gain-value",
-                             "window-mode", "screen-layout", "auto-join", "scale", "language", "pause-on-menu",
+                             "window-mode", "screen-layout", "auto-join", "secondary-size", "secondary-opacity", "scale", "language", "pause-on-menu",
                              "cache-summary", "rebuild", "remove-cache",
                              "toggle-steps", "open-log"};
     std::array<Rect, ids.size()> controls{};
@@ -791,6 +832,7 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
             return 2;
         if (!check_layout(window, *context, *document, 1040, 610, false, false, {})) return 4;
         for (const auto& [tab, field] : {std::pair{"tab-window", "window-mode"}, std::pair{"tab-game", "language"},
+                                         std::pair{"tab-map", "secondary-size"},
                                          std::pair{"tab-features", "unify-cutscenes"},
                                          std::pair{"tab-audio", "master-volume"},
                                          std::pair{"tab-screens", "screen-layout"}}) {
@@ -799,6 +841,9 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         }
         if (!check_layout(window, *context, *document, 420, 780, true, false, preview("launcher-compact.bmp"))) return 5;
         if (!check_layout(window, *context, *document, 390, 300, true, true, {})) return 6;
+        document->GetElementById("tab-map")->DispatchEvent(Rml::EventId::Click, {});
+        if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("map-wide.bmp")) ||
+            !check_layout(window, *context, *document, 390, 300, true, true, preview("map-short.bmp"))) return 18;
         document->GetElementById("tab-features")->DispatchEvent(Rml::EventId::Click, {});
         if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("features-wide.bmp")) ||
             !check_layout(window, *context, *document, 390, 300, true, true, preview("features-short.bmp"))) return 13;
@@ -854,7 +899,40 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         auto& layout_control = static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("pause-screen-layout"));
         std::vector<uint32_t> tiles(3 * st::ds_width * st::ds_screen_height, 0xff315374);
         std::fill(tiles.begin() + st::ds_width * st::ds_screen_height, tiles.end(), 0xff66845c);
+        std::fill(tiles.begin() + 2 * st::ds_width * st::ds_screen_height, tiles.end(), 0xff9f7350);
+        for (int plane = 0; plane < 3; ++plane)
+            for (int y = 0; y < 8; ++y)
+                for (int x = 0; x < 8; ++x) {
+                    tiles[(plane * st::ds_screen_height + y) * st::ds_width + x] = 0xffdd0022;
+                    tiles[((plane + 1) * st::ds_screen_height - 1 - y) * st::ds_width + x] = 0xff22dd00;
+                }
         document->Hide();
+        // Synthetic colors only: exercise the actual GL compositor, hit testing and persistent menu controls.
+        window.set_screen_layout(st::ScreenLayout::single, true);
+        for (const int opacity : {50, 75, 100}) {
+            window.set_secondary_view({20, opacity});
+            if (!window.present_game(tiles.data(), false, false, false)) return 18;
+            if (!previews.empty()) {
+                const auto shot = previews / ("single-overlay-" + std::to_string(opacity) + ".bmp");
+                if (!window.save_game_preview(path_to_utf8(shot).c_str())) return 18;
+            }
+            int w = 0, h = 0;
+            SDL_GetWindowSize(window.window(), &w, &h);
+            const auto views = st::screen_views(st::ScreenLayout::single, w, h, {20, opacity});
+            float x = views.top.x + views.top.width / 2.f, y = views.top.y + views.top.height / 2.f;
+            if (window.game_coordinates(x, y, false)) return 18;
+        }
+        if (!window.present_game(tiles.data(), true, false, true)) return 18;
+        if (!previews.empty() && !window.save_game_preview(path_to_utf8(previews / "single-cinematic.bmp").c_str())) return 18;
+        window.peek_secondary(true);
+        if (!window.present_game(tiles.data(), true, false, true)) return 18;
+        if (!previews.empty() && !window.save_game_preview(path_to_utf8(previews / "single-peek.bmp").c_str())) return 18;
+        float peek_x = 100.f, peek_y = 100.f;
+        if (window.game_coordinates(peek_x, peek_y, false)) return 18;
+        window.peek_secondary(false);
+        window.set_secondary_view({});
+        if (!window.present_game(tiles.data(), false, false, false)) return 18;
+        if (!previews.empty() && !window.save_game_preview(path_to_utf8(previews / "single-hidden.bmp").c_str())) return 18;
         pause.open();
         if (window.pause_on_menu() || launcher.pause_on_menu() ||
             pause_document->GetElementById("pause-title")->GetInnerRML() != "Menu") return 17;
@@ -888,6 +966,18 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
             layout_control.SetValue(key);
             if (launcher.screen_layout() != layout || !window.present_game(tiles.data(), false, false, false) ||
                 !pause.draw()) return 10;
+        }
+        layout_control.SetValue("single");
+        auto& size_control = static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("secondary-size"));
+        auto& opacity_control = static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("secondary-opacity"));
+        for (const int size : {0, 20, 30}) {
+            size_control.SetValue(std::to_string(size));
+            if (opacity_control.IsDisabled() != (size == 0)) return 18;
+            for (const int opacity : {50, 75, 100}) {
+                opacity_control.SetValue(std::to_string(opacity));
+                if (launcher.secondary_view() != st::SecondaryViewSettings{size, opacity} ||
+                    read_secondary_view(*document) != launcher.secondary_view() || !pause.draw()) return 18;
+            }
         }
         pause_document->GetElementById("tab-window")->DispatchEvent(Rml::EventId::Click, {});
         if (!pause.draw() || !pause_document->GetElementById("display")->IsVisible(true) ||

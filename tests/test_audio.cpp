@@ -79,7 +79,21 @@ int main() {
     if (buf_a != buf_b || !a.active()) return 6;
     int32_t peak = 0;
     for (int16_t v : buf_a) peak = std::max<int32_t>(peak, std::abs(int32_t(v)));
-    if (peak < 4000 || peak > 30000) return 7;
+    if (peak < 4000 || peak > 32768) return 7;
+    // A few large peaks alone do not establish a usable blow. Once the attack settles, require
+    // sustained energy and both polarities; the old quiet band-pass signal failed the real lesson.
+    a.generate(buf_a.data(), buf_a.size(), true, 100);
+    b.generate(buf_b.data(), buf_b.size(), true, 100);
+    double square_sum = 0, mean = 0;
+    for (const int16_t value : buf_a) { square_sum += double(value) * value; mean += value; }
+    if (buf_a != buf_b || std::sqrt(square_sum / buf_a.size()) < 32000 ||
+        std::abs(mean / buf_a.size()) > 3000) return 27;
+    st::BreathSynth zero_gain, high_gain;
+    zero_gain.generate(buf_b.data(), buf_b.size(), true, 0);
+    if (std::any_of(buf_b.begin(), buf_b.end(), [](int16_t value) { return value != 0; })) return 28;
+    high_gain.generate(buf_b.data(), buf_b.size(), true, 200);
+    if (std::find(buf_b.begin(), buf_b.end(), int16_t(32767)) == buf_b.end() ||
+        std::find(buf_b.begin(), buf_b.end(), int16_t(-32768)) == buf_b.end()) return 29;
 
     // Release decays back to exact silence after ~80 ms (~3808 samples)
     std::array<int16_t, 4200> release_buf{};
@@ -146,7 +160,42 @@ int main() {
     if (mic.device_open() || std::any_of(blow_buf.begin(), blow_buf.end(), [](int16_t v) { return v != 0; })) return 17;
     mic.on_stop();
 
-    // 4. Device enumeration must preserve SDL's output count across all C++ argument evaluation orders
+    // 4. Diagnostic reads are destructive only to counters, never to the delivered signal/envelope.
+    st::MicSource measured(std::make_unique<FakeMicBackend>()), reference(std::make_unique<FakeMicBackend>());
+    cfg.mic_mode = st::MicMode::virtual_blow;
+    cfg.mic_gain = 100;
+    for (auto* source : {&measured, &reference}) {
+        source->set_settings(cfg);
+        source->on_start();
+        source->set_blowing(true);
+    }
+    measured.on_read(buf_a.data(), buf_a.size());
+    reference.on_read(buf_b.data(), buf_b.size());
+    auto stats = measured.take_read_diagnostics();
+    if (buf_a != buf_b || stats.reads != 1 || stats.samples != buf_a.size() || stats.peak < 4000 ||
+        !stats.listening || stats.paused || !stats.blowing) return 21;
+    stats = measured.take_read_diagnostics();
+    if (stats.reads || stats.samples || stats.peak || !stats.listening) return 22;
+    measured.set_blowing(false);
+    reference.set_blowing(false);
+    std::array<int16_t, 4200> measured_release{}, reference_release{};
+    measured.on_read(measured_release.data(), measured_release.size());
+    reference.on_read(reference_release.data(), reference_release.size());
+    if (measured_release != reference_release) return 23;
+    measured.take_read_diagnostics();
+    measured.on_read(buf_a.data(), buf_a.size());
+    reference.on_read(buf_b.data(), buf_b.size());
+    stats = measured.take_read_diagnostics();
+    if (buf_a != buf_b || stats.reads != 1 || stats.samples != buf_a.size() || stats.peak || stats.blowing) return 24;
+    measured.set_paused(true);
+    measured.on_read(buf_a.data(), buf_a.size());
+    stats = measured.take_read_diagnostics();
+    if (stats.reads != 1 || stats.samples != buf_a.size() || stats.peak || !stats.paused) return 25;
+    measured.on_stop();
+    if (measured.take_read_diagnostics().listening) return 26;
+    reference.on_stop();
+
+    // 5. Device enumeration must preserve SDL's output count across all C++ argument evaluation orders
     if (SDL_InitSubSystem(SDL_INIT_AUDIO)) {
         int raw_play = 0;
         if (SDL_AudioDeviceID* raw = SDL_GetAudioPlaybackDevices(&raw_play)) {

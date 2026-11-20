@@ -1,0 +1,163 @@
+# Our own recorded inputs; no save, game assets, audio or game code included.
+# Gage: teaching, practice/Back, all three duet turns, joint performance, restored rails, world control.
+# Requires a LOCAL COPY of HelpTheWretched Saves03, slot 2; --save <copy.sav> --read-only-save.
+# Use the ours + original game module, CPU speed 4, fast cartridge, English, calibrated virtual blow at gain 100.
+# This is a deterministic regression script, not automatic note selection in normal gameplay.
+# Private screenshots are written only when --shots points below ignored build/.
+# See docs/design/FLUTE_AND_FRAAZ_SURVEY.md for verified scope and remaining PC-layout work.
+1000 press START 6
+1100 touch 128 120 6
+1300 touch 130 110 6
+1500 touch 128 118 6
+1700 touch 130 91 6
+3000 shot loaded
+3001 touch 128 6 300
+3361 touch 42 90 4
+3451 press A 4
+3511 press A 4
+3601 press A 4
+3691 press A 4
+3781 press A 4
+3871 press A 4
+3961 press A 4
+4051 press A 4
+4141 press A 4
+4231 press A 4
+4321 press A 4
+4411 press A 4
+4501 press A 4
+4591 press A 4
+4681 press A 4
+4771 press A 4
+4861 press A 4
+4951 press A 4
+5041 press A 4
+5131 press A 4
+5221 press A 4
+5311 press A 4
+5401 touch 205 94 4
+5501 press A 4
+5601 press A 4
+5701 press A 4
+5801 press A 4
+5901 press A 4
+6001 press A 4
+6101 touch 205 94 4
+6201 press A 4
+6301 press A 4
+6401 press A 4
+6501 press A 4
+6601 touch 123 46 6
+6781 touch 205 94 6
+7021 press A 4
+7261 press A 4
+7441 press A 4
+7741 press A 4
+7981 press A 4
+8221 press A 4
+8460 shot teaching_ready
+8461 touch 128 150 1
+8462 touch 127 150 1
+8463 touch 125 150 1
+8464 touch 124 150 1
+8465 touch 122 150 1
+8466 touch 120 150 1
+8467 touch 119 150 1
+8468 touch 117 150 1
+8469 touch 115 150 1
+8470 touch 114 150 1
+8471 touch 112 150 1
+8472 touch 110 150 181
+8473 blow 120
+8623 shot teaching_passed
+8803 press A 6
+9103 press A 6
+9583 press A 6
+10063 press A 6
+10363 touch 16 175 6
+10363 shot practice_controls
+10483 shot practice_return
+10663 press A 6
+10903 press A 6
+11143 touch 205 94 6
+11143 shot duet_choice
+11323 press A 6
+11503 shot duet_intro
+12072 touch 128 150 1
+12073 touch 126 150 1
+12074 touch 123 150 1
+12075 touch 121 150 1
+12076 touch 118 150 1
+12077 touch 116 150 1
+12078 touch 113 150 1
+12079 touch 110 150 56
+12089 blow 177
+12102 shot round1_orange
+12135 touch 98 150 1
+12136 touch 86 150 1
+12137 touch 74 150 42
+12147 shot round1_yellow
+12179 touch 62 150 1
+12180 touch 50 150 1
+12181 touch 38 150 120
+12191 shot round1_purple
+12301 shot round1_feedback
+12431 touch 128 150 1
+12432 touch 126 150 1
+12433 touch 123 150 1
+12434 touch 121 150 1
+12435 touch 118 150 1
+12436 touch 116 150 1
+12437 touch 113 150 1
+12438 touch 110 150 56
+12448 blow 178
+12461 shot round2_orange
+12494 touch 98 150 1
+12495 touch 86 150 1
+12496 touch 74 150 43
+12506 shot round2_yellow
+12539 touch 62 150 1
+12540 touch 50 150 1
+12541 touch 38 150 120
+12551 shot round2_purple
+12661 shot round2_feedback
+12790 touch 128 150 1
+12791 touch 126 150 1
+12792 touch 123 150 1
+12793 touch 121 150 1
+12794 touch 118 150 1
+12795 touch 116 150 1
+12796 touch 113 150 1
+12797 touch 110 150 56
+12807 blow 178
+12820 shot round3_orange
+12853 touch 98 150 1
+12854 touch 86 150 1
+12855 touch 74 150 43
+12865 shot round3_yellow
+12898 touch 62 150 1
+12899 touch 50 150 1
+12900 touch 38 150 120
+12910 shot round3_purple
+13020 shot round3_feedback
+13240 shot harmony_begin
+13720 shot harmony_camera
+14320 shot harmony_wide
+14920 press A 6
+14920 shot duet_complete
+15160 press A 6
+15160 shot rail_map_reward
+15520 press A 6
+15520 shot restored_tracks
+15760 press A 6
+15760 shot gage_after_reward
+16060 press A 6
+16360 press A 6
+16360 shot zelda_dialogue
+16600 touch 180 150 40
+16680 press A 6
+16920 press A 6
+17160 touch 180 150 40
+17160 shot field_after_duet
+17240 shot resumed_walking
+17241 quit

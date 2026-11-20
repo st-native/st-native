@@ -25,6 +25,7 @@
           <h2 id="settings-heading">Settings</h2>
           <div class="settings-tabs">
             <input type="submit" id="tab-screens" class="selected" value="Screens" />
+            <input type="submit" id="tab-map" value="Map" />
             <input type="submit" id="tab-features" value="Screen features" />
             <input type="submit" id="tab-audio" value="Audio" />
             <input type="submit" id="tab-window" value="Window" />
@@ -49,8 +50,9 @@
           </div>
           <div id="settings-screens" class="settings-page selected">
           <div class="field">
-            <label for="screen-layout">Two-screen layout</label>
+            <label for="screen-layout">Screen layout</label>
             <select id="screen-layout">
+              <option value="single">Single screen</option>
               <option value="focus">Large + side</option>
               <option value="classic">Classic DS</option>
               <option value="side-by-side">Side by side</option>
@@ -64,6 +66,27 @@
               <option value="manual">Original DS</option>
             </select>
           </div>
+          <p id="single-screen-note" class="hint">Single screen is currently manual. Some scenes need both views. Hold M to inspect the upper screen, or press F2 for both.</p>
+
+          </div>
+          <div id="settings-map" class="settings-page">
+            <div class="field">
+              <label for="secondary-size">Minimap / secondary view</label>
+              <select id="secondary-size">
+                <option value="0">Hidden</option>
+                <option value="20">Small (20%)</option>
+                <option value="30">Medium (30%)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="secondary-opacity">Overlay opacity</label>
+              <select id="secondary-opacity">
+                <option value="100">100%</option>
+                <option value="75">75%</option>
+                <option value="50">50%</option>
+              </select>
+            </div>
+            <p class="hint">Hold M to view the upper screen. F2 restores both original screens.</p>
           </div>
           <div id="settings-features" class="settings-page">
             <div class="field">

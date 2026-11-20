@@ -93,6 +93,42 @@ successfully, displaying the single menu canvas, opening/closing Esc/F1 settings
 30 presented frames with F2, and returning to the menu canvas. These concurrent correctness tests are not frame
 pacing benchmarks. Other platforms and remote CI were not run for this change.
 
+### Single-screen foundation (2026-11-18)
+
+**Implemented:** `Screens → Screen layout → Single screen` fits the original Touch Screen into the largest centered
+4:3 rectangle. It preserves aspect ratio and does not crop/stretch to the monitor. The verified cinematic,
+narration and save-menu policies still take priority when their individual enhancements are enabled.
+
+`Map` in both the launcher and Esc/F1 menu offers **Hidden**, **Small (20%)**, **Medium (30%)**, and opacity
+**100% / 75% / 50%**. Percentages measure the secondary view's width relative to the main 4:3 view. These settings
+apply only to Single screen and persist as a validated `secondary-view-v1` preferences extension; old preferences
+retain their selected layout. The secondary image is the whole original upper screen, not an extracted or
+semantically identified minimap. It may contain other information outside normal exploration.
+
+Hold **M** to inspect the original upper screen at full 4:3 size in any layout, including a unified scene; release
+to restore the prior presentation. This is display-only: no stylus events go to it. Opening Esc/F1, losing focus,
+changing layout, or pressing F2 clears the temporary view. M is not intercepted during native name entry; Tab keeps
+its existing fast-forward function. A manual layout switch or peek releases any active stylus first. An existing
+drag may cross a PiP rectangle, but a new press there never reaches the Touch Screen, even at 50% opacity.
+
+The backend draws the three-frame atlas through a small textured-quad compositor. It blends the secondary view
+over the main image; layout/settings/UI contain no GL calls. Synthetic captures exercise opacity, correct atlas
+planes, vertical orientation, letterboxing, and touch routing. Run `tests/check_screen_composition.py` on the
+ROM-free launcher smoke output to verify actual framebuffer colors without extra Python dependencies.
+
+**Proposed, not enabled:** automatic secondary-screen visibility for train radar, Spirit Pipes duets, boss phases
+and unverified exploration states. The existing default/fallback layout remains Large + side; Single screen is an
+explicit choice until these contextual rules are verified. There is no blank-screen detector or assumption that
+every upper screen is unnecessary. This step does not claim campaign-wide automatic PC presentation.
+
+**Verified locally (Windows x64):** 17 C++ tests and 12 Python tests pass. The ROM-free launcher smoke checks both
+menus, scrolling and all size/opacity choices; framebuffer checks pass for actual 50/75/100% blending, separate
+upper/touch/cinematic planes, asymmetric orientation markers and aspect bars. The existing early-gameplay script
+was replayed with presentation features off/on: all 31,000 state/RAM hashes match, with the same 3,997,080 fallback
+interpreter instructions. This is guest-state regression coverage, not a visual claim for every later scene.
+A real-window Single-screen boot smoke passes with M press/release, F2 and both pause-menu shortcuts. No player
+save is written by these tests. Other platforms and remote CI have not been run for this step.
+
 ### Reusing the cinematic camera
 
 The [local scene survey](DUAL_SCREEN_VALIDATION.md) now includes community checkpoints for Cole and the Tower.

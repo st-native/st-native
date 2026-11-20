@@ -30,7 +30,7 @@ INCLUDE = [
     "game/st/config/", "game/st/hooks/",
     "tools/__init__.py", "tools/check_no_game_data.py", "tools/game_data_allowlist.txt",
     "tools/build/build_program.cmd", "tools/build/st_build.py", "tools/build/st_build.cmd",
-    "tools/build/compare_builds.py", "tools/build/compare_runs.py", "tools/publish/",
+    "tools/build/compare_builds.py", "tools/build/compare_runs.py", "tools/publish/", "tools/testing/",
     "tools/re/__init__.py", "tools/re/ndsrom.py", "tools/re/blz.py", "tools/re/discover.py", "tools/re/requirements.txt",
     "tests/",
     "spike/m1a/",

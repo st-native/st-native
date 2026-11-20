@@ -4,6 +4,13 @@ Status: **Proposed** (2026-11-12). Facts marked **M p.N** are from the official 
 (game knowledge, unverified in this project); **U** = Unknown. Every row needs confirmation by play-testing with the
 original game (melonDS as reference) before its control mapping or context detection is implemented.
 
+**Coverage update (2026-11-18):** this document classifies requirements, not implemented support. The current
+per-context evidence, PC treatment and default-promotion gates live in
+[SINGLE_SCREEN_COVERAGE.md](SINGLE_SCREEN_COVERAGE.md). C23/C24 are expanded there into individual cinematics,
+bosses and phases. Several old proposals below (including Tab as a map shortcut) are not current bindings:
+M now peeks at the original upper screen; Tab remains fast-forward. Read the coverage register before implementing
+or claiming a context is safe with the upper screen hidden.
+
 Conventions used below:
 - **Stylus fallback** is available in every context: mouse on desktop, a pointer driven by the right stick / trackpad /
   gyro on controllers and Steam Deck (trigger = stylus down), the finger on Android.
@@ -28,7 +35,7 @@ Conventions used below:
 | C11 | Whirlwind: aim then blow (M p.24) | map | 3D | No | Single + mic indicator |
 | C12 | Other items: bow, bombs, whip, sand rod, bow of light (L) | map | 3D; taps/lines (L) | No | Single |
 | C13 | Spirit Pipes solo songs (M p.26) | song/notes guide (L) | pipes UI | **Yes** (L) | Horizontal or stacked while active (auto when `pipes_active` known) |
-| C14 | Pipes duets (L) | guide/partner (L) | pipes | Yes (L) | as C13 |
+| C14 | Pipes duets (L) | guide/partner (L) | pipes | Yes (L) | as C13; Gage practice reached, actual duet turns open ([survey](FLUTE_AND_FRAAZ_SURVEY.md)). |
 | C15 | Phantom: draw route, stop, call, switch viewpoint (M p.22–23) | map w/ Phantom icon (M p.17) | 3D | Often | Single + PiP map |
 | C16 | Phantom co-op puzzles (L) | map | 3D | Often | as C15 |
 | C17 | Rail Map world/region, memos (M p.16) | 3D/train (L) | rail map | Yes | Map on Touch main |
@@ -37,8 +44,8 @@ Conventions used below:
 | C20 | Train cannon (L) | map | cab 3D | Yes | as C19 |
 | C21 | Cargo, passengers, stations (M p.28) | map | cab | Yes | as C19 |
 | C22 | Rabbit catching (L; manual mentions rabbit stock p.14) | map | 3D | No | Single |
-| C23 | Cutscenes, transitions, scenes spanning both screens (U) | varies | varies | Sometimes | Auto → Classic/stacked when `cutscene` + dual-screen flag (U) |
-| C24 | Bosses (some use both screens in PH; ST U) | U | U | U | Per-boss rules after verification |
+| C23 | Cutscenes, transitions, scenes spanning both screens | varies | varies | Sometimes | Opening/Cole/prologue have bounded profiles; other contexts need separate camera/UI checks (SC01–SC08). |
+| C24 | Spirit Tracks bosses and their phases | map/camera/cues, depending on phase | combat/targeting | Sometimes essential | BO01–BO08: Fraaz reveal/combat reached; split-form identity and finale cues remain sourced requirements; local adaptation open ([survey](FLUTE_AND_FRAAZ_SURVEY.md)). |
 | C25 | Shops, stamp stations, mini-games (L) | varies | varies | U | Single |
 | C26 | Battle Mode, Contact Mode (M p.31–36) | records/arena (L) | arena | U | Out of scope until wireless decision |
 | C27 | MIC TEST meter (M p.11) | — | meter | No | Single; doubles as our mic calibration screen |
@@ -55,7 +62,7 @@ Bindings are defaults; every one is remappable. "Scheme" items depend on verifie
 | C02–C03 | WASD = movement scheme; mouse = stylus | Left stick = analog movement (scheme, PH-proven approach); A = interact (scheme); D-pad = original shortcuts | as controller; right trackpad = pointer | Touch; optional virtual stick |
 | C04 | Mouse = lock-on/slash; keys for slash/lunge/spin (scheme) | B = slash toward target/facing; stick + B = lunge; spin = stick circle or Y+B (scheme) | as controller | Touch gestures |
 | C05 | Click/Space advances | A advances (original A skips messages, M p.12) | A | Tap |
-| C06 | Click PiP = enlarge; Tab | View/Select = toggle PiP | View button | Tap PiP |
+| C06 | Hold M = view upper screen (implemented); click enlargement Proposed | View/Select = toggle PiP (Proposed) | View button (Proposed) | Tap PiP (Proposed) |
 | C07 | Mouse draws; MEMO/ERASE by click | Pointer + trigger draws; a "draw mode" toggle hides other actions | **Trackpad absolute mode** on map | Finger draws |
 | C08 | Click; L/R keys take out item (original) | Pointer; L/R original | as controller | Touch |
 | C09 | Click | Pointer | Pointer | Touch |

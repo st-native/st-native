@@ -15,8 +15,9 @@
 
 namespace st {
 
-// Deterministic band-limited breath generator (~200 Hz - 3.2 kHz at 47,605 Hz) with 30 ms attack
-// and 80 ms release (ADR-0006, CONTROLS_AND_MICROPHONE.md §6.3). Contains no game data or assets.
+// Deterministic bipolar noise at the mic's 47,605 Hz rate, with 30 ms attack and 80 ms release.
+// Blow detection needs sustained energy: the former low-level band-pass noise reached the ADC but
+// failed Gage's initial lesson. No recorded samples or game assets are used (ADR-0006).
 class BreathSynth {
 public:
     static constexpr int sample_rate = 47605;
@@ -24,10 +25,6 @@ public:
     void reset() {
         rng_ = 0x6d2b79f5u;
         envelope_ = 0.f;
-        lp_ = 0.f;
-        hp_in_ = 0.f;
-        hp_out_ = 0.f;
-        mod_phase_ = 0.f;
     }
 
     bool active() const { return envelope_ > 0.f; }
@@ -36,7 +33,6 @@ public:
         const float gain = float(clamp_mic_gain(gain_percent)) / 100.f;
         constexpr float attack_step = 1.f / (0.030f * float(sample_rate));
         constexpr float release_step = 1.f / (0.080f * float(sample_rate));
-        constexpr float mod_step = 6.5f / float(sample_rate);
         for (size_t i = 0; i < count; ++i) {
             if (blowing) envelope_ = std::min(1.f, envelope_ + attack_step);
             else envelope_ = std::max(0.f, envelope_ - release_step);
@@ -45,38 +41,22 @@ public:
                 out[i] = 0;
                 continue;
             }
-            // xorshift32 -> uniform [-1, 1]
+            // xorshift32 supplies the polarity; a near-zero DC mean and high sustained energy
+            // distinguish blowing from silence without selecting a pipe or a song.
             uint32_t x = rng_;
             x ^= x << 13;
             x ^= x >> 17;
             x ^= x << 5;
             rng_ = x;
-            const float white = (float(int32_t(x >> 8)) - 8388608.f) / 8388608.f;
-
-            // High-pass (~200 Hz) followed by two-stage low-pass (~3.2 kHz) for breath turbulence.
-            const float hp = 0.974f * (hp_out_ + white - hp_in_);
-            hp_in_ = white;
-            hp_out_ = hp;
-            lp_ += 0.34f * (hp - lp_);
-
-            // Smooth triangle-parabolic modulation (~6.5 Hz, +/- 10%) so steady blows look natural.
-            mod_phase_ += mod_step;
-            if (mod_phase_ >= 1.f) mod_phase_ -= 1.f;
-            const float tri = mod_phase_ < 0.5f ? (4.f * mod_phase_ - 1.f) : (3.f - 4.f * mod_phase_);
-            const float flutter = 0.90f + 0.10f * tri * (2.f - std::abs(tri));
-
-            const float sample = lp_ * envelope_ * flutter * gain * 26000.f;
-            out[i] = int16_t(std::clamp(int(sample), -30000, 30000));
+            const float polarity = (x & 0x80000000u) ? 32767.f : -32768.f;
+            const float sample = polarity * envelope_ * gain;
+            out[i] = int16_t(std::clamp(int(sample), -32768, 32767));
         }
     }
 
 private:
     uint32_t rng_ = 0x6d2b79f5u;
     float envelope_ = 0.f;
-    float lp_ = 0.f;
-    float hp_in_ = 0.f;
-    float hp_out_ = 0.f;
-    float mod_phase_ = 0.f;
 };
 
 class MicCaptureBackend {
@@ -90,6 +70,13 @@ public:
 };
 
 std::unique_ptr<MicCaptureBackend> create_sdl_mic_backend();
+
+// Numeric diagnostics since the last snapshot; never retains audio samples.
+struct MicReadDiagnostics {
+    uint64_t reads = 0, samples = 0;
+    int32_t peak = 0;
+    bool listening = false, paused = false, blowing = false;
+};
 
 class MicSource {
 public:
@@ -106,6 +93,7 @@ public:
     size_t on_read(int16_t* samples, size_t max_samples);
 
     bool device_open() const;
+    MicReadDiagnostics take_read_diagnostics();
 
 private:
     void open_session_locked();
@@ -125,6 +113,8 @@ private:
     const uint64_t* frame_counter_ = nullptr;
     int32_t session_peak_ = 0;
     uint64_t session_samples_ = 0;
+    uint64_t diagnostic_reads_ = 0, diagnostic_samples_ = 0;
+    int32_t diagnostic_peak_ = 0;
 };
 
 }  // namespace st

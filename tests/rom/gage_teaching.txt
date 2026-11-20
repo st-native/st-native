@@ -1,0 +1,81 @@
+# Our own recorded input data; no save, assets or game code included.
+# Requires a LOCAL COPY of HelpTheWretched Saves03, slot 2, and the ours + original module.
+# Use --save <local-copy.sav> --read-only-save with the calibrated virtual blow (2026-11-19).
+# Scope: initial teaching passes, free practice exposes Back, then return to Gage's dialogue.
+# No completed song or successful real duet is asserted by this replay.
+# --shots may write private images only below ignored build/.
+# See docs/design/FLUTE_AND_FRAAZ_SURVEY.md.
+1000 press START 6
+1100 touch 128 120 6
+1300 touch 130 110 6
+1500 touch 128 118 6
+1700 touch 130 91 6
+3000 shot loaded
+3001 touch 128 6 300
+3361 touch 42 90 4
+3451 press A 4
+3511 press A 4
+3601 press A 4
+3691 press A 4
+3781 press A 4
+3871 press A 4
+3961 press A 4
+4051 press A 4
+4141 press A 4
+4231 press A 4
+4321 press A 4
+4411 press A 4
+4501 press A 4
+4591 press A 4
+4681 press A 4
+4771 press A 4
+4861 press A 4
+4951 press A 4
+5041 press A 4
+5131 press A 4
+5221 press A 4
+5311 press A 4
+5401 touch 205 94 4
+5501 press A 4
+5601 press A 4
+5701 press A 4
+5801 press A 4
+5901 press A 4
+6001 press A 4
+6101 touch 205 94 4
+6201 press A 4
+6301 press A 4
+6401 press A 4
+6501 press A 4
+6601 touch 123 46 6
+6781 touch 205 94 6
+7021 press A 4
+7261 press A 4
+7441 press A 4
+7740 shot instrument_instruction
+7741 press A 4
+7981 press A 4
+8221 press A 4
+8460 shot teaching_ready
+8461 touch 128 150 1
+8462 touch 127 150 1
+8463 touch 125 150 1
+8464 touch 124 150 1
+8465 touch 122 150 1
+8466 touch 120 150 1
+8467 touch 119 150 1
+8468 touch 117 150 1
+8469 touch 115 150 1
+8470 touch 114 150 1
+8471 touch 112 150 1
+8472 touch 110 150 181
+8473 blow 120
+8623 shot teaching_passed
+8803 press A 6
+9103 press A 6
+9583 press A 6
+10063 press A 6
+10363 touch 16 175 6
+10363 shot practice_controls
+10483 shot practice_return
+10484 quit

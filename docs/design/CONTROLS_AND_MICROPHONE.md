@@ -42,6 +42,55 @@ physical devices ──► actions (profile + bindings) ──► DS events / sc
 
 ## 3. Profiles
 
+### Controller-first requirements (maintainer, 2026-11-20)
+
+**Proposed; not implemented by this document.** The maintainer expects most players to use a gamepad. Give the
+controller path the same complete gameplay coverage as keyboard/mouse, including configuration without a mouse.
+The current app has hardcoded basic DS mappings; a remapping interface, button-note integration and dynamic
+in-game glyphs are not yet shipped. The visual flute study is a proposal, not evidence of those features.
+
+- One **Controls** category in the launcher and Esc/F1 overlay, with **Keyboard & mouse** and **Controller** pages.
+  Include a contextual **Flute** group rather than a separate binding system. Group actions by general play,
+  menus, pointer/map, train, partner and instrument as those contexts become supported.
+- Both device paths support rebinding, contextual conflict notices, restore defaults and a preview of the bound
+  action. Keyboard/mouse adds pointer sensitivity and mouse bindings; controller adds active device, stick dead
+  zones, pointer sensitivity and trigger thresholds. Do not expose options whose input behavior is unimplemented.
+- A single action/binding model supplies gameplay, configuration labels, tutorials and HUD hints. After a rebind,
+  the instrument and any adapted prompt show that binding, never a fixed letter or a DS button from the ROM.
+- **Button symbols:** Automatic / Xbox / PlayStation / Nintendo (Deck-specific cues where supported). Prefer the
+  active device's reported type and labels, with a manual display override for virtual/unknown devices. SDL3 has
+  [gamepad types](https://wiki.libsdl.org/SDL3/SDL_GetGamepadType) and
+  [button labels](https://wiki.libsdl.org/SDL3/SDL_GetGamepadButtonLabel); actual device coverage needs testing.
+  Changing symbol style alone must not change the action bindings.
+- Store gamepad bindings by physical SDL position/action, not a manufacturer letter. The same south button is
+  Xbox A, PlayStation Cross and Nintendo B; a Nintendo face-label change must not accidentally rebind a note.
+  Where an explicit label-based preset is offered, its behavior is separate and visible.
+- Automatic hints follow deliberate input from the active device. Ignore idle stick noise and background mouse
+  motion; avoid glyph flicker during mixed input. Reconnection, multiple devices and a virtual controller need
+  an explicit fallback. Do not claim the physical brand is always detectable through a virtual device.
+- Use restrained, readable glyphs matching the game's UI. Preserve note identity with color plus shape/binding,
+  highlight held notes, and show teaching text only when relevant. The symbol assets need compatible licensing.
+
+**Proposed first flute preset:** four face buttons and two digital shoulder buttons, one action per pipe.
+Hold sustains breath/note, release stops; no separate blow modifier. These are candidates for ergonomic testing,
+not independently verified guest pipe coordinates or a guarantee for every duet. All remain remappable.
+
+| Pipe identity | Physical input | Xbox | PlayStation | Nintendo | Keyboard candidate |
+|---|---|---|---|---|---|
+| Green | Left shoulder | LB | L1 | L | A |
+| White | West face | X | Square | Y | S |
+| Blue | North face | Y | Triangle | X | D |
+| Orange | South face | A | Cross | B | F |
+| Yellow | East face | B | Circle | A | J |
+| Purple | Right shoulder | RB | R1 | R | K |
+
+Acceptance: finish Gage using only gamepad notes, then keyboard notes; test quick changes, repeated notes,
+rests, overlapping held buttons, cancellation and interruptions. Verify labels after remapping and each symbol
+override, including Nintendo's face positions. Release note/touch/breath on menu open, focus loss and device
+disconnect. Extend to solo songs and other duets before claiming campaign coverage.
+
+### Planned gameplay profiles
+
 | Profile | Movement | Combat | Gestures (boomerang, routes, map) | Notes |
 |---|---|---|---|---|
 | **Classic** | Stylus | Stylus | Stylus | Buttons exactly as the DS. Reference for correctness. |
@@ -112,15 +161,22 @@ gives), keeps the game's own cool-downs (spin dizziness), and is disabled outsid
 - Android: `RECORD_AUDIO` requested only when the player selects Real/Hybrid/Automatic; denial falls back to Virtual
   with an explanation.
 
-### 6.3 Virtual blowing signal (Proposed, to calibrate)
-- Generator: white noise → band-pass (≈ 200 Hz–4 kHz) → envelope (attack 30 ms, release 80 ms) → amplitude set by
-  "blow strength" (default calibrated so the game's MIC TEST meter reads a strong, steady blow).
-- Optional slow amplitude modulation so detectors that look for natural variation still trigger (to test).
+### 6.3 Virtual blowing signal (implemented; mechanic coverage incomplete)
+- Generator: deterministic bipolar noise at 47,605 Hz → envelope (attack 30 ms, release 80 ms) → gain and signed
+  16-bit clipping. It uses our PRNG and no recorded sample. Zero gain is exact silence; steady gain 100 has high
+  sustained energy and a near-zero DC mean.
+- **Verified, 2026-11-19:** this signal passes Gage's teaching and all three turns of the actual duet in the native
+  build (`tests/rom/gage_duet.txt`), followed by the joint performance, restored rails and resumed walking. The former quiet
+  band-pass signal reached the core ADC but did not pass that stage. A private comparison using the melonDS team's
+  explicitly GPL-licensed frontend signal supplied the positive reference; that recording is not part of our generator.
+- MIC TEST, real-mic comparison, other duets and other mechanics remain acceptance checks below. This is virtual
+  breath with pointer-selected notes; optional button-note controls and a one-canvas flute view are not implemented.
 - Calibration procedure: (1) open MIC TEST (C27); (2) blow into a real mic at a comfortable distance and record the
   game-visible level via the mic-level function (read-only probe) or the meter; (3) set the default strength to match;
   (4) validate on every mechanic in §6.5.
-- Fallback per mechanic (ADR-0006): game-level hook on the mic-loudness function (USA ov0 `0x02070128`, from the
-  D-pad patch; to verify) returning the calibrated value while virtual blow is held.
+- Fallback per mechanic (ADR-0006): a small hook on a verified input-level function if synthesis proves unreliable.
+  The external candidate USA ov0 `0x02070128` has not been independently established as a no-argument volume getter;
+  isolated execution needs additional call state. No fallback hook is enabled from that hypothesis.
 
 ### 6.4 What virtual blowing must not do
 It never selects notes, never plays songs, never aims the Whirlwind, never completes puzzles. It is "breath" only.
@@ -132,14 +188,32 @@ It never selects notes, never plays songs, never aims the Whirlwind, never compl
 | MIC TEST meter | Meter responds; silence reads ~0; virtual blow reads strong and steady |
 | Whirlwind | Fires in the aimed direction; stuns enemies; works in each dungeon use |
 | Spirit Pipes: each learned song, solo | Correct notes with player-selected pipes; song recognised; same breath-length tolerance as real blowing |
-| Spirit Pipes duets (if present) | Timing windows met at normal difficulty with both input modes |
+| Spirit Pipes duets | Timing windows met at normal difficulty with both input modes. Gage Verified with virtual breath and pointer-selected notes; real mic and other duets remain open. |
 | Dust-blowing interaction(s) | Completes as with a real mic |
 | Any other `Mic_Start` site found by `--mic-log` | Behaviour matches real-mic behaviour |
 | Hybrid arbitration | Holding virtual blow while speaking gives the virtual result only |
 | Device unplug during a song | Falls back or warns; game continues; no stuck "blow" |
 | Android suspend during mic use | Mic closed on suspend, reopened on resume only if the game still listens |
 
+### 6.6 Numeric microphone diagnostics
+
+**Implemented, 2026-11-19:** the CLI option `--mic-profile build/<run>/microphone.csv` records one row per
+completed video frame: callback read count, delivered sample count, absolute peak, listening/paused state and
+the requested virtual-blow state. No waveform/audio samples or game memory are written. Use a new private
+output directory; the CSV stays below ignored `build/`, alongside local replay results.
+
+Counts/peak cover reads since the preceding row. Silent, paused and Off reads count their zero-filled samples;
+no read is distinct from a read containing silence. `virtual_blow` is the requested input, not a claim that the
+game accepted a note. The synthesized microphone input can remain nonzero briefly after that flag becomes zero.
+The snapshot resets diagnostic counters only, preserving synthesis state, capture data and the Start/Stop log.
+It measures the host microphone callback, not the game's note decoder. Compare identical scripted runs with
+and without this option before using it as evidence; diagnostic runs are not performance benchmarks.
+
+Synthetic audio tests check nonzero blow, release to silence, empty snapshots, paused reads and identical output
+with/without diagnostic snapshots. Full songs/duets still require the ROM compatibility checks above.
+
 ## 7. Accessibility hooks into controls
+
 Hold/toggle options for blow and stylus-hold actions, adjustable blow strength, one-handed layouts (all actions on
 one side), pointer speed and snapping for drawing, large virtual buttons on Android, remappable everything, and a
 left-handed preset that follows the game's handedness option.

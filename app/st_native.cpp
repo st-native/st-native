@@ -47,6 +47,7 @@
 //     --input-device <name>  recording device name (default: system default)
 //     --mic-gain <0-200>     microphone capture and virtual-blow level in percent (default 100)
 //     --mic-log <file>       write microphone Start/Stop frames and peak levels (no audio samples)
+//     --mic-profile <csv>    per-frame mic read counts, sample counts, peak and source state (no audio samples)
 //     --perf, --trace-threads, --trace-calls   the runtime's logs
 //   Script: one step per line, "#" starts a comment. Frames count from 1, the first frame shown.
 //     <frame> press <KEY>[+<KEY>...] [<frames held, default 6>]
@@ -120,7 +121,7 @@ constexpr KnownDump kKnown[] = {
 };
 
 struct Options {
-    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile, scene_profile, mic_log;
+    fs::path rom, module, save, script, hashes, shots, counts, record, control, frame_profile, scene_profile, mic_log, mic_profile;
     std::string wireless_group, player_name = "Link";
     std::vector<std::pair<uint64_t, std::string>> ram_dumps;
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
@@ -354,6 +355,7 @@ public:
         mic_.set_paused(paused);
     }
     void set_profile(std::ostream* stream) { profile_ = stream; }
+    void set_mic_profile(std::ostream* stream) { mic_profile_ = stream; }
     void set_scene_profile(std::ostream* stream, const ntr::GameCode& code) {
         scene_profile_ = stream;
         for (size_t i = 0; i < code.overlay_count; ++i)
@@ -364,6 +366,11 @@ public:
     bool on_frame(const ntr::Frame& f) override {
         const auto profile_start = profile_ ? SDL_GetTicksNS() : 0;
         ++frame_;
+        if (mic_profile_) {
+            const auto m = mic_.take_read_diagnostics();
+            *mic_profile_ << frame_ << ',' << m.reads << ',' << m.samples << ',' << m.peak << ','
+                          << m.listening << ',' << m.paused << ',' << m.blowing << '\n';
+        }
         name_keyboard.finish_frame();
         if (save_dirty_ && frame_ >= save_written_at_ + kSaveQuiet) flush_save();
         interp_total_ += f.interp_steps;
@@ -680,6 +687,7 @@ private:
     std::mutex audio_mutex_;
     bool audio_enabled_ = false, window_focused_ = true, audio_started_ = false, audio_paused_ = false;
     std::ostream* profile_ = nullptr;
+    std::ostream* mic_profile_ = nullptr;
     std::ostream* scene_profile_ = nullptr;
     std::vector<uint32_t> scene_overlay_ids_;
     uint64_t profile_previous_ = 0, audio_empty_feeds_ = 0, audio_dropped_samples_ = 0;
@@ -828,6 +836,8 @@ bool parse_args(int argc, char** argv, Options& o) {
             o.audio.mic_gain = int(v);
         } else if (a == "--mic-log") {
             o.mic_log = next_path();
+        } else if (a == "--mic-profile") {
+            o.mic_profile = next_path();
         } else if (a == "--language") {
             const std::string l = next();
             o.language = l == "fr" ? 2 : l == "es" ? 5 : 1;
@@ -922,6 +932,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         if (!mic_log) return std::fprintf(stderr, "cannot write %s\n", o.mic_log.string().c_str()), 2;
     }
 
+    std::ofstream mic_profile;
+    if (!o.mic_profile.empty()) {
+        mic_profile.open(o.mic_profile);
+        if (!mic_profile) return std::fprintf(stderr, "cannot open mic profile output\n"), 2;
+        mic_profile << "frame,reads,samples,peak,listening,paused,virtual_blow\n";
+    }
+
     if (o.frame_profile.empty())
         if (const char* path = std::getenv("ST_NATIVE_FRAME_PROFILE")) o.frame_profile = path_from_utf8(path);
     std::ofstream frame_profile, present_profile;
@@ -997,6 +1014,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         if (event != Uint32(-1)) sh.frame_event = event;
     }
     StHost host(o, sh, std::move(script), hashes, mic_log.get(), ro.cinematic_camera);
+    if (mic_profile.is_open()) host.set_mic_profile(&mic_profile);
     if (frame_profile.is_open()) host.set_profile(&frame_profile);
     if (scene_profile.is_open()) host.set_scene_profile(&scene_profile, code);
 
@@ -1063,6 +1081,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         };
 
         auto change_menu = [&](bool open) {
+            if (presentation) presentation->peek_secondary(false);
             kb = pad = stick = 0;
             kb_blow = pad_blow = trig_blow = false;
             mouse_down = false;
@@ -1085,13 +1104,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             else menu->close();
         };
 
-        auto test_key = [&](SDL_Scancode scancode, SDL_Keycode keycode) {
+        auto test_key = [&](SDL_Scancode scancode, SDL_Keycode keycode, bool down = true) {
             SDL_Event key{};
-            key.type = SDL_EVENT_KEY_DOWN;
+            key.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
             key.key.windowID = SDL_GetWindowID(window);
             key.key.scancode = scancode;
             key.key.key = keycode;
-            key.key.down = true;
+            key.key.down = down;
             if (!SDL_PushEvent(&key)) view_error = sh.quit = true;
         };
         while (!sh.done) {
@@ -1117,7 +1136,10 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         break;
                     }
                     if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) host.set_window_focused(true);
-                    else if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) host.set_window_focused(false);
+                    else if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                        host.set_window_focused(false);
+                        if (presentation) presentation->peek_secondary(false);
+                    }
                     else if (e.type == SDL_EVENT_AUDIO_DEVICE_ADDED || e.type == SDL_EVENT_AUDIO_DEVICE_REMOVED)
                         host.refresh_audio_devices();
                     if (menu && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
@@ -1138,6 +1160,15 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         case st::PauseAction::leave: sh.quit = true; break;
                         case st::PauseAction::resume: change_menu(false); break;
                         case st::PauseAction::stay: break;
+                        }
+                        continue;
+                    }
+                    if (presentation && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) &&
+                        e.key.scancode == SDL_SCANCODE_M && !SDL_TextInputActive(window)) {
+                        if (!e.key.repeat) {
+                            mouse_down = false;
+                            sh.touching = false;
+                            presentation->peek_secondary(e.type == SDL_EVENT_KEY_DOWN);
                         }
                         continue;
                     }
@@ -1294,6 +1325,10 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 if (test_stage == 0 && presented_frames == test_menu_after) {
                     test_key(SDL_SCANCODE_ESCAPE, SDLK_ESCAPE);
                     test_stage = 1;
+                } else if (test_stage == 2 && presented_frames == test_menu_after + 4) {
+                    test_key(SDL_SCANCODE_M, SDLK_M);
+                } else if (test_stage == 2 && presented_frames == test_menu_after + 6) {
+                    test_key(SDL_SCANCODE_M, SDLK_M, false);
                 } else if (test_stage == 2 && presented_frames == test_menu_after + 10) {
                     test_key(SDL_SCANCODE_F2, SDLK_F2);
                 } else if (test_stage == 2 && presented_frames == test_menu_after + 30) {
@@ -1368,6 +1403,7 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
     o.screen_features = launch.enhancements.mask();
     o.audio = launch.audio;
     presentation.set_screen_layout(launch.layout, launch.automatic_join, launch.enhancements);
+    presentation.set_secondary_view(launch.secondary);
     presentation.set_audio_settings(launch.audio);
     presentation.set_pause_on_menu(launch.pause_on_menu);
     SDL_Window& window = *presentation.window();

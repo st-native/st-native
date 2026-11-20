@@ -35,6 +35,11 @@ Repository: [st-native/st-native on GitHub](https://github.com/st-native/st-nati
 [GitHub Actions](https://github.com/st-native/st-native/actions) checks the source-only bundle and runs the
 Linux x64/arm64 app/runtime build, C++ tests, recompiler difftests and our synthetic cartridge. No user ROM is used.
 
+In the Windows alpha, choose **Screens → Single screen** for a centered 4:3 main view, then **Map** for an optional
+secondary overlay and its opacity. Hold **M** to inspect the original upper screen; **F2** restores the original
+two-screen arrangement. Automatic radar/boss/duet visibility remains under development, so Single screen is currently
+an explicit choice rather than the default for unverified contexts.
+
 Build the Windows program as described in [docs/BUILDING.md](docs/BUILDING.md), then open `st_launcher.exe` from its
 build folder or use [Launch.cmd](Launch.cmd). See [CONTRIBUTING.md](CONTRIBUTING.md) for contributor instructions.
 
@@ -45,6 +50,8 @@ build folder or use [Launch.cmd](Launch.cmd). See [CONTRIBUTING.md](CONTRIBUTING
 | Building, playing, checking reproducibility | [docs/BUILDING.md](docs/BUILDING.md), [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Architecture and decisions | [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md), [ADRs](docs/architecture/DECISIONS/README.md) |
 | Enhancements: app/runtime vs game hooks | [docs/design/ENHANCEMENTS.md](docs/design/ENHANCEMENTS.md) |
+| Single-screen campaign requirements and default-promotion gates | [docs/design/SINGLE_SCREEN_COVERAGE.md](docs/design/SINGLE_SCREEN_COVERAGE.md) |
+| Current PC delivery steps: Gage, Fraaz, reusable presentation, train/partner and developer alpha | [docs/design/PC_ALPHA_PLAN.md](docs/design/PC_ALPHA_PLAN.md) |
 | Dual-screen presentation, controls and microphone, interaction matrix, settings and mods | [docs/design/](docs/design/) |
 | Recompilation base on five targets (M1a) | [docs/research/M1A_SPIKE.md](docs/research/M1A_SPIKE.md) |
 | First boot of the game (M1b local, M2's first milestone) | [docs/research/M1B_FIRST_BOOT.md](docs/research/M1B_FIRST_BOOT.md) |

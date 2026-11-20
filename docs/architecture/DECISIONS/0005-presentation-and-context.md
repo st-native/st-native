@@ -41,3 +41,9 @@ See [scene validation](../../design/DUAL_SCREEN_VALIDATION.md) for measured cove
 optional software foreground text over the original Touch Screen art. Alpha bounds are used for rendering only,
 never context detection. No additional camera pass or guest write is needed. Automatic presentation releases this
 rule before gameplay's display-window state. See [Narrative presentation](../../design/NARRATIVE_PRESENTATION.md).
+
+**Default-promotion gate (2026-11-18):** the per-context register is
+[SINGLE_SCREEN_COVERAGE.md](../../design/SINGLE_SCREEN_COVERAGE.md). A single PC canvas may contain a map/status
+panel or an independent camera when that information is essential. A hidden physical screen plus manual peek is
+not sufficient acceptance. Unknown contexts retain both views in the development default; read-only checkpoint
+boots are distinct from reaching an encounter, implementing a profile and accepting its presentation.
