@@ -163,6 +163,15 @@ The `Map` tab controls the optional overlay for `Screens → Single screen`; hol
 peek, and use F2 for the original arrangement. Existing preferences are preserved.
 To exercise preparation and cache reuse directly, run
 `.venv\Scripts\python -I platform\windows\launcher.py --rom "C:\path\to\your\Spirit Tracks.nds" --prepare-only`.
+In **Graphics → Internal resolution**, choose a per-screen resolution from **256x192 (Native)**
+through **3072x2304**. The launcher and pause menu share this preference. If the Graphics
+tab appears with an empty selector, run `tools\build\build_program.cmd --tests` to rebuild
+the executable and copy the matching UI assets, then reopen it from the release build folder.
+
+For a ROM smoke test at a specific resolution, set `ST_NATIVE_SMOKE_RESOLUTION` (for example,
+`1024x768`). Set `ST_NATIVE_SMOKE_SWITCH_RESOLUTION` to change resolution at the first pause,
+or `ST_NATIVE_SMOKE_ORIGINAL=1` to exercise the original dual-screen cutscene view.
+
 Use `st_launcher.exe --game-smoke <rom>` to test module preparation or reuse, then open and close the pause menu
 with both shortcuts in windowed and fullscreen sessions and verify that the launcher redraws in the same window.
 The test keeps the blank save in memory.
