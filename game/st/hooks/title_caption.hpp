@@ -7,7 +7,7 @@
 #include <span>
 #include <limits>
 #include "nitro_ui_asset.hpp"
-#include <string_view>
+#include "title_prompt_art.hpp"
 #include <vector>
 
 namespace st {
@@ -17,7 +17,9 @@ namespace st {
 class TitleCaption {
 public:
     bool apply(std::span<uint8_t> rom, uint8_t language) {
-        if (!load(rom, language)) return false;
+        const auto& letters = language == 2 ? title_art::french :
+                              language == 5 ? title_art::spanish : title_art::english;
+        const int text_width = int(letters.front().size());
         // These localized TitleM.bin entries were identified in the ROM's FNT.
         const unsigned file = language == 2 ? 396 : language == 5 ? 3303 : 238;
         const size_t fat = nitro_ui::word(rom,0x48) + file * 8;
@@ -73,7 +75,7 @@ public:
             const int y = int(attr_y & 127) - int(attr_y & 128);
             for (int v = 0; v < h; ++v)
                 for (int u = 0; u < w; ++u) {
-                    const unsigned index = palette_index(x+u+width_/2,y+v+8);
+                    const unsigned index = palette_index(letters,x+u+text_width/2,y+v+8);
                     const size_t pixel = (tile + size_t(v/8*(w/8)+u/8))*32 + (v%8)*4 + (u%8)/2;
                     const unsigned shift = (u&1)*4;
                     tiles[pixel] = uint8_t((tiles[pixel] & ~(15u<<shift)) | (index<<shift));
@@ -89,84 +91,22 @@ public:
     }
 
 private:
-    bool load(std::span<const uint8_t> rom, uint8_t language) {
-        // BKIE rev. 0 FAT entry for Font/DSZ2_msg.nftr, checked against the local FNT.
-        const auto fat = nitro_ui::word(rom, 0x48);
-        constexpr size_t file = 339;
-        const size_t lo = nitro_ui::word(rom, size_t(fat) + file * 8);
-        const size_t hi = nitro_ui::word(rom, size_t(fat) + file * 8 + 4);
-        if (lo >= hi || hi > rom.size() || hi - lo < 4) return false;
-        const auto font = nitro_ui::decompress(rom.subspan(lo, hi-lo));
-        if (font.size() < 16 || nitro_ui::word(font,0) != 0x4e465452u) return false;
-        size_t glyphs = 0, widths = 0, mapping = 0;
-        for (size_t pos = 16; pos + 8 <= font.size();) {
-            const auto size = nitro_ui::word(font,pos+4);
-            if (size < 8 || size > font.size()-pos) return false;
-            switch (nitro_ui::word(font,pos)) {
-            case 0x43474c50u: glyphs = pos; break; // PLGC
-            case 0x43574448u: widths = pos; break; // HDWC
-            case 0x434d4150u: if (!mapping) mapping = pos; break; // PAMC
-            }
-            pos += size;
-        }
-        if (!glyphs || !widths || !mapping || glyphs+16 > font.size()) return false;
-        const unsigned cell_x = font[glyphs+8], cell_y = font[glyphs+9];
-        const unsigned stride = nitro_ui::half(font,glyphs+10), bpp = font[glyphs+14];
-        if (cell_x > 16 || cell_y > 16 || bpp != 2 || stride*8 < cell_x*cell_y*bpp || font[glyphs+15]) return false;
-        std::u16string_view message = u"Press any button!";
-        if (language == 2) message = u"Appuyez sur une touche !";
-        else if (language == 5) message = u"¡Pulsa cualquier botón!";
-        int pen = 1;
-        for (uint16_t ch : message) {
-            const auto index = glyph(font,mapping,ch);
-            const auto tile = glyphs + 16 + size_t(index) * stride;
-            const auto width = widths + 16 + size_t(index) * 3;
-            if (index == 0xffff || tile + stride > font.size() || width + 3 > font.size()) return false;
-            const int advance = font[width+2];
-            if (!advance || pen + int(cell_x) > text_width) return false;
-            for (unsigned y = 0; y < cell_y; ++y)
-                for (unsigned x = 0; x < cell_x; ++x) {
-                    const unsigned bit = (y*cell_x+x)*2;
-                    if ((font[tile+bit/8] >> (6-bit%8) & 3) != 0)
-                        ink_[y*text_width+pen+x] = true;
-                }
-            pen += advance;
-        }
-        width_ = std::min(pen + 1, text_width);
-        return true;
-    }
-
-    unsigned palette_index(int x, int y) const {
-        auto ink = [&](int u, int v) {
-            return u >= 0 && u < width_ && v >= 0 && v < 16 && ink_[v*text_width+u];
+    static unsigned palette_index(const std::array<std::string_view,15>& letters, int x, int y) {
+        auto coverage = [&](int u, int v) {
+            if (v < 0 || v >= int(letters.size()) || u < 0 || u >= int(letters[v].size())) return ' ';
+            return letters[v][u];
         };
-        // Original caption palette: gold face and dark contour.
-        if (ink(x,y)) return y < 6 ? 2 : y < 10 ? 3 : 4;
+        // The original title cell's palette supplies the color ramp and shadow.
+        switch (coverage(x,y)) {
+        case '@': return 2;
+        case '+': return 4;
+        case '.': return 7;
+        default: break;
+        }
         for (int dy = -1; dy <= 1; ++dy)
             for (int dx = -1; dx <= 1; ++dx)
-                if (ink(x+dx,y+dy)) return 9;
-        return ink(x-2,y-2) ? 1 : 0;
-    }
-
-    static uint16_t glyph(std::span<const uint8_t> data, size_t pos, uint16_t code) {
-        for (unsigned blocks = 0; blocks < 16 && pos+22 <= data.size(); ++blocks) {
-            if (nitro_ui::word(data,pos) != 0x434d4150u) break;
-            const auto first = nitro_ui::half(data,pos+8), last = nitro_ui::half(data,pos+10), method = nitro_ui::half(data,pos+12);
-            if (code >= first && code <= last) {
-                if (method == 0) return uint16_t(nitro_ui::half(data,pos+20)+code-first);
-                if (method == 1) {
-                    const size_t entry = pos + 20 + size_t(code-first)*2;
-                    if (entry + 4 <= data.size()) {
-                        const auto value = nitro_ui::half(data,entry);
-                        if (value != 0xffff) return value;
-                    }
-                }
-            }
-            const auto next = nitro_ui::word(data,pos+16);
-            if (next < 8 || next-8 <= pos) break;
-            pos = next-8;
-        }
-        return 0xffff;
+                if (coverage(x+dx,y+dy) != ' ') return 9;
+        return coverage(x-2,y-2) != ' ' ? 1 : 0;
     }
 
     // Same LZ10 format as the original, with a bounded 4 KiB search window.
@@ -217,9 +157,6 @@ private:
         return result;
     }
 
-    static constexpr int text_width = 180;
-    std::array<bool,16*text_width> ink_{};
-    int width_ = 0;
 };
 
 } // namespace st

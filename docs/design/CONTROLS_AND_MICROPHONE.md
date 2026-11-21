@@ -139,8 +139,10 @@ Start accepts the name, and L3 still opens port settings.
 - The train opening accepts a keyboard or controller button through the game's Start input. A separate
   press activates the title. At launch, the PC option replaces only the title caption cell's indexed
   tiles in the in-memory NitroFS resource. The original title palette, animated ribbon, feather and
-  credits are still drawn by the game. The new phrase uses the game's message font because the asset
-  contains the old phrase as a baked sprite. Its letterforms differ from the original caption.
+  credits are still drawn by the game. The original instruction is baked into an image. Reggae One
+  by Fontworks was the closest match in a local comparison of the original letter shapes. The
+  project's new phrases are rasterized at DS size from the open font. The exact original typeface
+  remains unconfirmed. Regenerate the letter masks with `tools/testing/render_title_prompt.py`.
 - In the narrated prologue, **Skip opening story** is remappable and defaults to Start/Enter.
   It opens the original Skip control and activates it in the same scene.
 - The PC adapter uses the verified file-menu display state, two read-only BKIE menu fields and the
