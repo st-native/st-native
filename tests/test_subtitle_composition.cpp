@@ -44,6 +44,10 @@ int main() {
     revealed[3 * 256 + 238] = revealed[3 * 256 + 246] =
         revealed[8 * 256 + 243] = revealed[8 * 256 + 251] = 0xfffbfbfbu;
     if (!st::native_skip_visible(revealed.data())) return 10;
+    // Pressing the control shifts its chevrons; the fade dims the text.
+    revealed[3 * 256 + 238] = revealed[3 * 256 + 246] = 0xff000000u;
+    revealed[8 * 256 + 245] = revealed[8 * 256 + 243] = revealed[8 * 256 + 251] = 0xff606060u;
+    if (!st::native_skip_visible(revealed.data())) return 10;
     for (const auto label : {"Menu", "Keypad Memory Subtract", ""}) {
         for (const auto language : {1u,2u,5u}) {
             auto before = art, after = revealed;

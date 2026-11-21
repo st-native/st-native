@@ -546,11 +546,11 @@ public:
             if (f.bottom && st::native_skip_visible(f.bottom)) {
                 prologue_skip_ = 6;
             } else {
-                prologue_skip_ = 16;
+                // The first press opens the original control. A second press
+                // or a click on the visible replacement confirms the skip.
                 pressed |= st::input::bit(st::input::Action::start);
             }
         }
-        if (prologue_skip_ > 10) held |= st::input::bit(st::input::Action::start);
         rt_->set_buttons(held, pressed);
         if (!touch && sh_.touching) touch = true, tx = sh_.touch_x, ty = sh_.touch_y;
         if (sh_.cancel_menu_touch.exchange(false)) menu_touch_frames_ = 0;
@@ -559,10 +559,8 @@ public:
             if (!touch) touch = true, tx = sh_.touch_x, ty = sh_.touch_y;
             --menu_touch_frames_;
         }
-        // The game's Start reveals Skip. After a few guest frames, activate that
-        // control while the same narrated scene is still active.
         if (prologue_skip_ > 0) {
-            if (!touch && prologue_skip_ <= 6) { touch = true; tx = 235; ty = 10; }
+            if (!touch) { touch = true; tx = 235; ty = 10; }
             --prologue_skip_;
         }
         if (touch) rt_->touch(tx, ty), touched_ = true;
@@ -1129,7 +1127,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         bool window_focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
         bool editing_name = false;
         bool mouse_down = false;
-        int skip_prompt_left = st::skip_prompt_default_left;
+        int skip_prompt_left = kW;
         st::MenuFocus menu_focus;
         std::vector<st::input::ControllerStep> controller_replay;
         size_t controller_step = 0;
@@ -1152,13 +1150,15 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         uint64_t presented_frames = 0, previous_present_ns = 0;
         std::vector<uint32_t> frame(kW * kH * 3);
         const auto compose_skip = [&](st::GameMenu frame_menu, bool cinematic) {
-            if (!input.settings.game_menus || frame_menu != st::GameMenu::prologue) return;
+            skip_prompt_left = kW;
+            auto* touch = frame.data()+kW*kH;
+            if (!input.settings.game_menus || frame_menu != st::GameMenu::prologue || !st::native_skip_visible(touch)) return;
             using namespace st::input;
             const auto binding = prompt_binding(input.settings,Action::skip_cutscene,using_gamepad,pad_id != 0);
             auto* pad = pad_id ? SDL_GetGamepadFromID(pad_id) : nullptr;
             const auto type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
             const auto caption = binding.kind == Kind::none ? std::string{} : prompt_label(binding,input.settings.symbols,type);
-            skip_prompt_left = st::draw_skip_prompt(frame.data()+kW*kH,caption,o.language);
+            skip_prompt_left = st::draw_skip_prompt(touch,caption,o.language);
             if (cinematic) st::draw_skip_prompt(frame.data()+2*kW*kH,caption,o.language);
         };
 

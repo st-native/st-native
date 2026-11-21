@@ -45,10 +45,13 @@
 4010 shot mode
 4050 button south 1
 4056 button south 0
-4650 shot prologue
-4670 key Left 1
-4676 key Left 0
-4690 shot prologue_keyboard_hint
+4650 shot prologue_hidden
+4660 button start 1
+4666 button start 0
+4680 shot prologue_revealed
+4690 key Left 1
+4696 key Left 0
+4705 shot prologue_keyboard_hint
 4715 button rightshoulder 1
 4721 button rightshoulder 0
 4740 shot prologue_pad_hint

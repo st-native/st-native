@@ -8,16 +8,15 @@
 
 namespace st {
 
-// BKIE rev. 0 prologue. The original black control and its two white
-// chevrons were measured in the touch replay before and after Start.
-// The scene comes from ScreenContext. Check the unmodified frame only to
-// decide whether the action needs to reveal the original hit target first.
+// BKIE rev. 0 prologue. The black backdrop and matching chevron centers
+// remain in place when the button is pressed and as it fades. The scene
+// itself comes from ScreenContext.
 inline bool native_skip_visible(const uint32_t* touch) {
     constexpr int width = 256;
     const auto rgb = [&](int x, int y) { return touch[y * width + x] & 0xffffffu; };
-    const auto white = [&](int x, int y) { return (rgb(x,y) & 0xf8f8f8u) == 0xf8f8f8u; };
-    return rgb(168,8) == 0 && rgb(175,14) == 0 &&
-        white(238,3) && white(246,3) && white(243,8) && white(251,8);
+    const auto shade = rgb(243,8);
+    return shade != 0 && shade == (shade & 255) * 0x010101 &&
+        rgb(251,8) == shade && rgb(244,5) == 0 && rgb(168,8) == 0 && rgb(175,14) == 0;
 }
 
 namespace skip_art {
@@ -78,8 +77,7 @@ inline int draw_skip_prompt(uint32_t* pixels, std::string_view binding, unsigned
     const int action_x = 250 - int(action.size()) * 6;
     const int key_x = action_x - 5 - key_width;
     const int left = std::min(skip_prompt_default_left,key_x - 4);
-    // Cover the original widget's full footprint, including its edges during
-    // the fade. Keep one presentation even while Start reveals the guest UI.
+    // Cover the original widget's full footprint, including its edges during the fade.
     for (int y = 0; y < skip_prompt_height; ++y)
         std::fill_n(pixels + y * 256 + left,256-left,y == skip_prompt_height - 1 ? 0xff2b3430u : 0xff101715u);
     if (key_width) {
