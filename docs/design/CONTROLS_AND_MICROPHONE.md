@@ -144,9 +144,9 @@ Start accepts the name, and L3 still opens port settings.
   project's new phrases are rasterized at DS size from the open font. The exact original typeface
   remains unconfirmed. Regenerate the letter masks with `tools/testing/render_title_prompt.py`.
 - In the narrated prologue, **Skip opening story** is remappable and defaults to Start/Enter.
-  A small prompt shows the current binding for the most recently used input device. When the game
-  draws its own Skip control, the keycap sits immediately to its left. The action reveals the
-  original control if needed and activates it in the same scene.
+  With PC game menus enabled, one visible Skip button covers the original control throughout the
+  scene. Its keycap shows the current binding for the most recently used input device. Clicking
+  the button or using the shortcut reveals and activates the original hit target underneath it.
 - The PC adapter uses verified display states and read-only BKIE menu fields, plus the existing
   editable-name hook. Unsupported contexts retain the original DS inputs. The original title
   art returns on the next launch after disabling PC game menus.

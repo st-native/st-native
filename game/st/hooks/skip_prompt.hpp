@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string_view>
@@ -9,8 +10,8 @@ namespace st {
 
 // BKIE rev. 0 prologue. The original black control and its two white
 // chevrons were measured in the touch replay before and after Start.
-// The scene comes from ScreenContext. This checks whether the original
-// control is already drawn before placing the keycap or tapping Skip.
+// The scene comes from ScreenContext. Check the unmodified frame only to
+// decide whether the action needs to reveal the original hit target first.
 inline bool native_skip_visible(const uint32_t* touch) {
     constexpr int width = 256;
     const auto rgb = [&](int x, int y) { return touch[y * width + x] & 0xffffffu; };
@@ -67,19 +68,26 @@ inline void panel(uint32_t* pixels, int x, int width, uint32_t border, uint32_t 
 
 } // namespace skip_art
 
-inline void draw_skip_prompt(uint32_t* pixels, std::string_view binding, unsigned language, bool native_visible) {
-    if (binding.empty()) return;
+inline constexpr int skip_prompt_default_left = 164;
+inline constexpr int skip_prompt_height = 18;
+
+inline int draw_skip_prompt(uint32_t* pixels, std::string_view binding, unsigned language) {
     binding = binding.substr(0,22);
     const std::string_view action = language == 2 ? "Passer" : language == 5 ? "Saltar" : "Skip";
-    const int key_width = int(binding.size()) * 6 + 7;
-    const int action_width = native_visible ? 0 : int(action.size()) * 6 + 9;
-    const int left = (native_visible ? 162 : 253) - action_width - key_width;
-    skip_art::panel(pixels,left,key_width,0xff989789u,0xff232725u);
-    skip_art::text(pixels,left+4,binding,0xfffaf6e5u);
-    if (!native_visible) {
-        skip_art::panel(pixels,left+key_width+2,action_width-2,0xff19201fu,0xff101715u);
-        skip_art::text(pixels,left+key_width+6,action,0xffe9e8dfu);
+    const int key_width = binding.empty() ? 0 : int(binding.size()) * 6 + 7;
+    const int action_x = 250 - int(action.size()) * 6;
+    const int key_x = action_x - 5 - key_width;
+    const int left = std::min(skip_prompt_default_left,key_x - 4);
+    // Cover the original widget's full footprint, including its edges during
+    // the fade. Keep one presentation even while Start reveals the guest UI.
+    for (int y = 0; y < skip_prompt_height; ++y)
+        std::fill_n(pixels + y * 256 + left,256-left,y == skip_prompt_height - 1 ? 0xff2b3430u : 0xff101715u);
+    if (key_width) {
+        skip_art::panel(pixels,key_x,key_width,0xff989789u,0xff232725u);
+        skip_art::text(pixels,key_x+4,binding,0xfffaf6e5u);
     }
+    skip_art::text(pixels,action_x,action,0xffe9e8dfu);
+    return left;
 }
 
 } // namespace st

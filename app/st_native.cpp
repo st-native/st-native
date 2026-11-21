@@ -1129,6 +1129,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         bool window_focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
         bool editing_name = false;
         bool mouse_down = false;
+        int skip_prompt_left = st::skip_prompt_default_left;
         st::MenuFocus menu_focus;
         std::vector<st::input::ControllerStep> controller_replay;
         size_t controller_step = 0;
@@ -1150,6 +1151,16 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         uint64_t applied_audio_rev = presentation ? presentation->audio_revision() : 0;
         uint64_t presented_frames = 0, previous_present_ns = 0;
         std::vector<uint32_t> frame(kW * kH * 3);
+        const auto compose_skip = [&](st::GameMenu frame_menu, bool cinematic) {
+            if (!input.settings.game_menus || frame_menu != st::GameMenu::prologue) return;
+            using namespace st::input;
+            const auto binding = prompt_binding(input.settings,Action::skip_cutscene,using_gamepad,pad_id != 0);
+            auto* pad = pad_id ? SDL_GetGamepadFromID(pad_id) : nullptr;
+            const auto type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
+            const auto caption = binding.kind == Kind::none ? std::string{} : prompt_label(binding,input.settings.symbols,type);
+            skip_prompt_left = st::draw_skip_prompt(frame.data()+kW*kH,caption,o.language);
+            if (cinematic) st::draw_skip_prompt(frame.data()+2*kW*kH,caption,o.language);
+        };
 
         auto sync_pause = [&](bool want_paused) {
             if (game_paused == want_paused) return;
@@ -1437,7 +1448,11 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         bool hit = true;
                         if (presentation) hit = presentation->game_coordinates(x,y,mouse_down);
                         else { y -= kH; hit = mouse_down || (x >= 0 && x < kW && y >= 0 && y < kH); }
-                        if (hit) {
+                        if (hit && (rising & st::input::bit(A::touch)) && game_menu == st::GameMenu::prologue &&
+                            x >= skip_prompt_left && x < kW && y >= 0 && y < st::skip_prompt_height) {
+                            sh.skip_prologue = true;
+                            mouse_down = false;
+                        } else if (hit) {
                             mouse_down = true;
                             sh.touch_x = std::clamp(int(x),0,kW-1);
                             sh.touch_y = std::clamp(int(y),0,kH-1);
@@ -1456,6 +1471,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             if (menu_open) {
                 if (presentation) {
                     bool fresh = false, shared_scene = false, cinematic = false;
+                    st::GameMenu frame_menu = st::GameMenu::none;
                     {
                         std::lock_guard<std::mutex> lock(sh.m);
                         fresh = sh.fresh;
@@ -1463,12 +1479,14 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                             frame.swap(sh.pixels);
                             shared_scene = sh.shared_scene;
                             cinematic = sh.cinematic;
+                            frame_menu = sh.frame_menu;
                             sh.fresh = false;
                         }
                     }
                     if (fresh) {
                         saw_shared_scene |= shared_scene;
                         saw_cinematic |= cinematic;
+                        compose_skip(frame_menu,cinematic);
                         if (!presentation->update_game_frame(frame.data(), shared_scene, false, cinematic))
                             view_error = sh.quit = true;
                     }
@@ -1507,20 +1525,8 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         menu_art.draw(frame.data()+kW*kH,game_menu,menu_focus.index(),*item);
                         if (cinematic) menu_art.draw(frame.data()+2*kW*kH,game_menu,menu_focus.index(),*item);
                     }
-                    if (game_menu == st::GameMenu::prologue) {
-                        using namespace st::input;
-                        const auto binding = prompt_binding(input.settings,Action::skip_cutscene,using_gamepad,pad_id != 0);
-                        if (binding.kind != Kind::none) {
-                            auto* pad = pad_id ? SDL_GetGamepadFromID(pad_id) : nullptr;
-                            const auto type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
-                            const auto caption = prompt_label(binding,input.settings.symbols,type);
-                            auto* touch = frame.data()+kW*kH;
-                            const bool native_skip = st::native_skip_visible(touch);
-                            st::draw_skip_prompt(touch,caption,o.language,native_skip);
-                            if (cinematic) st::draw_skip_prompt(frame.data()+2*kW*kH,caption,o.language,native_skip);
-                        }
-                    }
                 }
+                compose_skip(frame_menu,cinematic);
                 if (!presentation->present_game(frame.data(), shared_scene, mouse_down, cinematic)) view_error = sh.quit = true;
                 if (!controller_shot.empty() && !controller_shots.empty()) {
                     if (controller_profile) controller_profile << frame_number << ',' << controller_shot << ',' << int(game_menu) << ','
