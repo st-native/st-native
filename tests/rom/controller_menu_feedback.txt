@@ -1,0 +1,65 @@
+# SDL controller input for the developer launcher smoke path. Start from a blank save.
+# Set ST_NATIVE_SMOKE_FRAMES=4160 and point ST_NATIVE_SMOKE_CONTROLLER here.
+# Expected: 11 navigation cues. Frame 2150 is a blocked Down and must stay silent.
+# All coordinates and screenshots belong to the local replay driver. Only input is stored here.
+1000 button west 1
+1006 button west 0
+1150 button north 1
+1156 button north 0
+1900 button south 1
+1906 button south 0
+2050 shot first_slot
+2100 button dpdown 1
+2106 button dpdown 0
+2130 shot second_slot
+2150 button dpdown 1
+2156 button dpdown 0
+2200 button south 1
+2206 button south 0
+2340 shot name_first
+2380 button dpright 1
+2386 button dpright 0
+2400 shot name_second
+2420 button south 1
+2426 button south 0
+2510 button start 1
+2516 button start 0
+2620 shot confirm_yes
+2630 button dpdown 1
+2636 button dpdown 0
+2640 shot confirm_no
+2650 button dpup 1
+2656 button dpup 0
+2670 button south 1
+2676 button south 0
+2810 button south 1
+2816 button south 0
+2970 button south 1
+2976 button south 0
+3440 button south 1
+3446 button south 0
+3620 button dpdown 1
+3626 button dpdown 0
+3670 button south 1
+3676 button south 0
+3810 shot start
+3820 button dpdown 1
+3826 button dpdown 0
+3830 shot copy
+3840 button dpright 1
+3846 button dpright 0
+3850 shot erase
+3860 button dpup 1
+3866 button dpup 0
+3890 button south 1
+3896 button south 0
+4030 shot adventure
+4040 button dpdown 1
+4046 button dpdown 0
+4055 shot battle
+4070 button dpdown 1
+4076 button dpdown 0
+4090 shot tag
+4100 button dpright 1
+4106 button dpright 0
+4120 shot options

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "launcher_window.hpp"
 #include "cursor_interface.hpp"
+#include "../input/gamepads.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi_Platform_SDL.h>
@@ -208,6 +209,9 @@ struct LauncherWindow::State {
     std::atomic<uint64_t> audio_revision{1};
     st::AudioSettings audio;
     std::atomic<bool> pause_on_menu{false};
+    st::input::Controls controls;
+    std::unique_ptr<st::input::Gamepads> gamepads;
+    std::function<bool(const SDL_Event&)> input_filter;
 
     bool show_cinematic() const {
         return cinematic && active_cinematic_tex != 0 && shared_scene && (automatic_join != classic_override);
@@ -289,6 +293,7 @@ struct LauncherWindow::State {
     }
 
     ~State() {
+        gamepads.reset();
         if (window) SDL_ShowCursor();
         if (gl && window) {
             SDL_GL_MakeCurrent(window.get(), gl);
@@ -319,9 +324,11 @@ LauncherWindow::~LauncherWindow() {
 bool LauncherWindow::open(const char* title, int width, int height) {
     if (!SDL_Init(SDL_INIT_VIDEO)) return false;
     SDL_InitSubSystem(SDL_INIT_AUDIO);
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) return false;
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     const float scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     state_ = std::make_unique<State>();
+    state_->gamepads = std::make_unique<st::input::Gamepads>();
     for (const auto [major, minor] : {std::pair{4, 3}, std::pair{3, 3}}) {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, major);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, minor);
@@ -357,6 +364,13 @@ bool LauncherWindow::open(const char* title, int width, int height) {
 
 SDL_Window* LauncherWindow::window() const { return state_->window.get(); }
 
+st::input::Controls LauncherWindow::controls_settings() const { return state_->controls; }
+void LauncherWindow::set_controls_settings(const st::input::Controls& controls) {
+    if (controls.validate()) state_->controls = controls;
+}
+void LauncherWindow::observe_input(const SDL_Event& event) { state_->gamepads->event(event); }
+SDL_JoystickID LauncherWindow::active_gamepad() const { return state_->gamepads->active(); }
+void LauncherWindow::set_input_filter(std::function<bool(const SDL_Event&)> filter) { state_->input_filter = std::move(filter); }
 bool LauncherWindow::bind_worker_graphics() {
     {
         std::lock_guard lock(state_->frame_mutex);
@@ -478,7 +492,8 @@ bool LauncherWindow::publish_game_frame(const st::GameFrameInput& input) {
     return wake;
 }
 
-bool LauncherWindow::present_published_game(bool touch_captured, st::PresentedFrameInfo& info, bool render) {
+bool LauncherWindow::present_published_game(bool touch_captured, st::PresentedFrameInfo& info, bool render,
+                                            const st::SoftwareFrameOverlay& overlay) {
     info = {};
     {
         std::lock_guard lock(state_->frame_mutex);
@@ -522,8 +537,10 @@ bool LauncherWindow::present_published_game(bool touch_captured, st::PresentedFr
         }
     } else {
         const size_t plane = size_t(kDsWidth) * size_t(kDsHeight);
-        state_->upload_soft_planes(slot.cpu_pixels.data(), slot.cpu_pixels.data() + plane,
-                                   slot.cinematic ? slot.cpu_pixels.data() + 2 * plane : nullptr);
+        auto* bottom = slot.cpu_pixels.data() + plane;
+        auto* cinematic = slot.cinematic ? bottom + plane : nullptr;
+        if (overlay) overlay(bottom, cinematic, slot.frame_number);
+        state_->upload_soft_planes(slot.cpu_pixels.data(), bottom, cinematic);
     }
 
     info.drew = true;
@@ -551,6 +568,8 @@ bool LauncherWindow::process_events(Rml::Context& context, bool* audio_devices_c
     for (bool queued = next_event(true); queued; queued = next_event(false)) {
         if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) open = false;
         else {
+            observe_input(event);
+            if (state_->input_filter && state_->input_filter(event)) continue;
             if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED) update_minimum_size(window());
             if (audio_devices_changed &&
                 (event.type == SDL_EVENT_AUDIO_DEVICE_ADDED || event.type == SDL_EVENT_AUDIO_DEVICE_REMOVED))
@@ -731,7 +750,7 @@ void LauncherWindow::menu_input(Rml::Context& context, SDL_Event& event) {
     RmlSDL::InputEventHandler(&context, window(), event);
 }
 
-bool LauncherWindow::draw_pause(Rml::Context& context) {
+bool LauncherWindow::draw_pause(Rml::Context& context, const char* preview_path) {
     state_->system->set_game_mode(false);
     SDL_ShowCursor();
     int width, height;
@@ -746,6 +765,7 @@ bool LauncherWindow::draw_pause(Rml::Context& context) {
     renderer.BeginFrame();
     context.Render();
     renderer.EndFrame();
+    if (preview_path && !save_preview(width,height,preview_path)) return false;
     return SDL_GL_SwapWindow(window());
 }
 

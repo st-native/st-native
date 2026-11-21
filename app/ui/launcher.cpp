@@ -30,13 +30,14 @@
 #include "../present/cursor_interface.hpp"
 #include "../setup/launcher_worker.hpp"
 #include "../settings/launcher_preferences.hpp"
+#include "controls_panel.hpp"
 
 namespace fs = std::filesystem;
 
 namespace {
 
 constexpr const char* kTitle = "Spirit Tracks Native";
-constexpr int kWidth = 800, kHeight = 610;
+constexpr int kWidth = 800, kHeight = 650;
 
 using st::kLayoutOptions;
 using st::parse_screen_layout;
@@ -155,7 +156,10 @@ st::AudioSettings read_audio_settings(Rml::ElementDocument& document) {
 
 bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) {
     if (!id.starts_with("tab-") || !document.GetElementById(id)) return false;
-    for (const std::string key : {"screens", "graphics", "map", "features", "audio", "window", "game"}) {
+    if (auto* content = document.GetElementById("content")) content->SetClass("controls-open",id == "tab-controls");
+    if (auto* viewport = document.GetElementById("viewport")) viewport->SetScrollTop(0);
+    if (auto* panel = document.GetElementById("pause-panel")) panel->SetScrollTop(0);
+    for (const std::string key : {"screens", "graphics", "map", "features", "audio", "controls", "window", "game"}) {
         auto* tab = document.GetElementById("tab-" + key);
         if (!tab) continue;
         const bool selected = id == tab->GetId();
@@ -169,9 +173,12 @@ class Launcher final : public Rml::EventListener {
     enum class Action { inspect, verify, play, rebuild, remove };
 
 public:
-    Launcher(Rml::ElementDocument& document, SDL_Window* window, fs::path checkout, fs::path settings)
-        : document_(document), window_(window), checkout_(std::move(checkout)), settings_(std::move(settings)),
+    Launcher(Rml::ElementDocument& document, LauncherWindow& presentation, fs::path checkout, fs::path settings)
+        : document_(document), window_(presentation.window()), presentation_(presentation), checkout_(std::move(checkout)), settings_(std::move(settings)),
           prefs_(settings_) {
+        presentation_.set_controls_settings(prefs_.controls);
+        controls_ = std::make_unique<st::ControlsPanel>(document_,[this] { return prefs_.controls; },
+            [this](const auto& settings) { save_controls(settings); },[this] { return presentation_.active_gamepad(); });
         syncing_ = true;
         control("scale").SetValue(prefs_.scale);
         control("language").SetValue(prefs_.language);
@@ -200,6 +207,7 @@ public:
     }
 
     void ProcessEvent(Rml::Event& event) override {
+        if (controls_->process(event)) return;
         if (event.GetId() == Rml::EventId::Change) {
             if (syncing_) return;
             prefs_.scale = control("scale").GetValue();
@@ -248,6 +256,7 @@ public:
     }
 
     void update() {
+        controls_->refresh();
         std::optional<std::string> selection;
         {
             std::scoped_lock lock(dialog_mutex_);
@@ -284,7 +293,7 @@ public:
             ready_ = st::GameLaunch{path_from_utf8(prefs_.rom), module, language,
                                     prefs_.scale[0] - '0', prefs_.window == "fullscreen", prefs_.layout,
                                     prefs_.automatic_join, prefs_.enhancements, prefs_.audio,
-                                    prefs_.pause_on_menu, prefs_.secondary, prefs_.internal_scale};
+                                    prefs_.pause_on_menu, prefs_.secondary, prefs_.internal_scale, prefs_.controls};
         } else if (action_ == Action::play && result == 0) {
             show_status("Preparation did not return a game module.", true);
         }
@@ -292,6 +301,14 @@ public:
     }
 
     bool busy() const { return dialog_open_ || process_ != nullptr; }
+    bool input(const SDL_Event& event) { return controls_->input(event); }
+    const st::input::Controls& controls_settings() const { return prefs_.controls; }
+    void save_controls(const st::input::Controls& settings) {
+        if (!settings.validate()) return;
+        prefs_.controls = settings;
+        presentation_.set_controls_settings(settings);
+        persist();
+    }
     void save_display_mode(bool fullscreen) {
         syncing_ = true;
         prefs_.window = fullscreen ? "fullscreen" : "windowed";
@@ -428,6 +445,7 @@ private:
             control(id).SetDisabled(busy());
         enable_enhancements(document_, !busy() && prefs_.automatic_join);
         enable_audio_controls(document_, !busy(), prefs_.audio.mic_mode);
+        controls_->enabled(!busy());
     }
 
     void show_steps(bool show) {
@@ -570,6 +588,8 @@ private:
 
     Rml::ElementDocument& document_;
     SDL_Window* window_;
+    LauncherWindow& presentation_;
+    std::unique_ptr<st::ControlsPanel> controls_;
     fs::path checkout_;
     fs::path settings_;
     Preferences prefs_;
@@ -589,6 +609,8 @@ class PauseMenu final : public st::GamePauseMenu, private Rml::EventListener {
 public:
     PauseMenu(Rml::Context& context, Rml::ElementDocument& document, LauncherWindow& window, Launcher& launcher)
         : context_(context), document_(document), window_(window), launcher_(launcher) {
+        controls_ = std::make_unique<st::ControlsPanel>(document_,[this] { return launcher_.controls_settings(); },
+            [this](const auto& settings) { launcher_.save_controls(settings); },[this] { return window_.active_gamepad(); });
         document_.AddEventListener(Rml::EventId::Click, this);
         document_.AddEventListener(Rml::EventId::Change, this);
     }
@@ -599,6 +621,7 @@ public:
     }
 
     void open() override {
+        controls_->cancel();
         action_ = st::PauseAction::stay;
         syncing_ = true;
         update_display_button();
@@ -625,8 +648,11 @@ public:
             expected_open_scale_ = st::parse_internal_scale(smoke_switch_resolution_);
         }
     }
-    void close() override { document_.Hide(); }
+    void close() override { controls_->cancel(); document_.Hide(); }
+    bool capturing_input() const override { return controls_->capturing(); }
     void input(SDL_Event& event) override {
+        if (controls_->input(event)) return;
+        if (st::gamepad_menu_input(context_,event)) return;
         if (event.type == SDL_EVENT_AUDIO_DEVICE_ADDED || event.type == SDL_EVENT_AUDIO_DEVICE_REMOVED) {
             syncing_ = true;
             populate_audio_devices(document_, launcher_.audio_settings());
@@ -635,7 +661,7 @@ public:
         }
         window_.menu_input(context_, event);
     }
-    bool draw() override { return !smoke_failed_ && window_.draw_pause(context_); }
+    bool draw() override { controls_->refresh(); return !smoke_failed_ && window_.draw_pause(context_); }
     st::PauseAction action() const override { return action_; }
 
     void configure_smoke(int initial_scale, std::string switch_resolution) {
@@ -669,6 +695,7 @@ private:
     }
 
     void ProcessEvent(Rml::Event& event) override {
+        if (controls_->process(event)) return;
         if (event.GetId() == Rml::EventId::Change) {
             if (!syncing_ && document_.IsVisible()) {
                 const auto layout = parse_screen_layout(control("pause-screen-layout").GetValue());
@@ -723,6 +750,7 @@ private:
     Rml::ElementDocument& document_;
     LauncherWindow& window_;
     Launcher& launcher_;
+    std::unique_ptr<st::ControlsPanel> controls_;
     st::PauseAction action_ = st::PauseAction::stay;
     bool syncing_ = false;
     bool smoke_verify_views_ = false, smoke_failed_ = false;
@@ -748,7 +776,7 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
         return Rect{start.x, start.y, start.x + size.x, start.y + size.y};
     };
     constexpr std::array ids{"mark", "game-heading", "rom", "browse", "status", "play", "settings-heading",
-                             "tab-screens", "tab-graphics", "internal-resolution", "tab-map", "tab-features", "tab-audio", "tab-window", "tab-game",
+                             "tab-screens", "tab-graphics", "internal-resolution", "tab-map", "tab-features", "tab-audio", "tab-controls", "tab-window", "tab-game",
                              "unify-cutscenes", "narrative-subtitles", "hide-secondary",
                              "master-volume", "master-volume-value", "mute-unfocused", "audio-interp",
                              "output-device", "mic-mode", "input-device", "mic-gain", "mic-gain-value",
@@ -772,10 +800,11 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
     }
     const auto game = rect(*document.GetElementById("game"));
     const auto settings = rect(*document.GetElementById("settings"));
-    if (stacked ? settings.top <= game.bottom : settings.left <= game.right) return false;
+    if (document.GetElementById("game")->IsVisible(true) &&
+        (stacked ? settings.top <= game.bottom : settings.left <= game.right)) return false;
     const float scroll = viewport->GetScrollHeight() - viewport->GetClientHeight();
     if (!scrollable) return scroll <= 1;
-    if (scroll <= 1) return false;
+    if (scroll <= 1) return !stacked;
     viewport->SetScrollTop(scroll);
     window.draw(context);
     auto* activity = document.GetElementById("build-activity");
@@ -783,6 +812,113 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
     const bool last_control_reachable = rect(*last_control).bottom <= bounds.y + 1;
     viewport->SetScrollTop(0);
     return last_control_reachable;
+}
+
+bool check_controls_menu(Rml::ElementDocument& document, Launcher& launcher, Rml::Context& context,
+                         const std::function<void(SDL_Event&)>& feed, const std::function<bool()>& draw,
+                         const std::function<bool()>& conflict_preview = {}) {
+    using A = st::input::Action;
+    auto form = [&](const char* id) -> Rml::ElementFormControl& {
+        return static_cast<Rml::ElementFormControl&>(*document.GetElementById(id));
+    };
+    auto click = [&](const std::string& id) { document.GetElementById(id)->DispatchEvent(Rml::EventId::Click,{}); };
+    const std::string green = "binding-"+std::to_string(size_t(A::note1));
+    const std::string orange = "binding-"+std::to_string(size_t(A::note4));
+    click("tab-controls");
+    form("controls-group").SetValue("instrument");
+    click("controls-keyboard");
+    if (!draw()) return false;
+    click(green+"-0");
+    SDL_Event event{}; event.type=SDL_EVENT_KEY_DOWN; event.key.scancode=SDL_SCANCODE_G;
+    feed(event);
+    if (launcher.controls_settings().bindings[size_t(A::note1)][0] != st::input::key(SDL_SCANCODE_G)) return false;
+    click(green+"-0"); event.key.scancode=SDL_SCANCODE_J; feed(event);
+    if (!draw() || !document.GetElementById("controls-conflict")->IsVisible(true) ||
+        document.GetElementById("controls-conflict-description")->GetInnerRML().find("Yellow")==std::string::npos)
+        return std::fprintf(stderr,"Controls smoke: conflict popup did not identify the binding\n"), false;
+    if (conflict_preview && !conflict_preview()) return false;
+    event.key.scancode=SDL_SCANCODE_ESCAPE; feed(event);
+    if (!draw() || document.GetElementById("controls-conflict")->IsVisible(true) ||
+        launcher.controls_settings().bindings[size_t(A::note1)][0] != st::input::key(SDL_SCANCODE_G))
+        return std::fprintf(stderr,"Controls smoke: conflict cancel changed a binding\n"), false;
+    click(green+"-0"); event.key.scancode=SDL_SCANCODE_J; feed(event);
+    click("controls-conflict-replace");
+    if (launcher.controls_settings().bindings[size_t(A::note1)][0] != st::input::key(SDL_SCANCODE_J) ||
+        launcher.controls_settings().bindings[size_t(A::note5)][0].kind != st::input::Kind::none)
+        return std::fprintf(stderr,"Controls smoke: conflict transfer failed\n"), false;
+    click(green+"-0"); event.key.scancode=SDL_SCANCODE_G; feed(event);
+    // Nintendo and Sony labels change without changing a physical binding.
+    click("controls-gamepad");
+    const auto before=launcher.controls_settings().bindings;
+    if (!draw()) return false;
+    document.GetElementById("controls-symbols")->Focus();
+    auto nav = [&](SDL_GamepadButton button) {
+        SDL_Event e{}; e.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN; e.gbutton.button=button;
+        st::gamepad_menu_input(context,e); e.type=SDL_EVENT_GAMEPAD_BUTTON_UP; st::gamepad_menu_input(context,e);
+    };
+    nav(SDL_GAMEPAD_BUTTON_SOUTH);
+    if (!static_cast<Rml::ElementFormControlSelect&>(form("controls-symbols")).IsSelectBoxVisible())
+        return std::fprintf(stderr,"Controls smoke: controller did not open the label selector\n"), false;
+    nav(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+    if (launcher.controls_settings().symbols!=st::input::Symbols::xbox)
+        return std::fprintf(stderr,"Controls smoke: selector did not advance (%d)\n",int(launcher.controls_settings().symbols)), false;
+    nav(SDL_GAMEPAD_BUTTON_SOUTH);
+    if (static_cast<Rml::ElementFormControlSelect&>(form("controls-symbols")).IsSelectBoxVisible())
+        return std::fprintf(stderr,"Controls smoke: selector did not close\n"), false;
+    document.GetElementById("controls-deadzone")->Focus();
+    const int deadzone=launcher.controls_settings().deadzone;
+    nav(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+    if (launcher.controls_settings().deadzone<=deadzone)
+        return std::fprintf(stderr,"Controls smoke: controller did not adjust dead zone\n"), false;
+    form("controls-symbols").SetValue("2");
+    if (form((orange+"-2").c_str()).GetValue()!="Cross") return false;
+    form("controls-symbols").SetValue("3");
+    if (form((orange+"-2").c_str()).GetValue()!="B" || before!=launcher.controls_settings().bindings) return false;
+    // Controller-only modal: default Cancel, then explicit focus + confirmed transfer.
+    click(green+"-2"); event={}; event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    event.gbutton.button=SDL_GAMEPAD_BUTTON_SOUTH; feed(event);
+    if (!draw() || !document.GetElementById("controls-conflict")->IsVisible(true)) return false;
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; feed(event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN; feed(event); // Cancel has initial focus
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; feed(event);
+    if (launcher.controls_settings().bindings!=before) return false;
+    click(green+"-2"); event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN; feed(event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; feed(event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN; event.gbutton.button=SDL_GAMEPAD_BUTTON_DPAD_RIGHT; feed(event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; feed(event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN; event.gbutton.button=SDL_GAMEPAD_BUTTON_SOUTH; feed(event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; feed(event);
+    if (launcher.controls_settings().bindings[size_t(A::note1)][2]!=st::input::button(SDL_GAMEPAD_BUTTON_SOUTH) ||
+        launcher.controls_settings().bindings[size_t(A::note4)][2].kind!=st::input::Kind::none) return false;
+    click(green+"-2"); event={}; event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    event.gbutton.button=SDL_GAMEPAD_BUTTON_DPAD_LEFT; feed(event);
+    if (launcher.controls_settings().bindings[size_t(A::note1)][2] != st::input::button(SDL_GAMEPAD_BUTTON_DPAD_LEFT)) return false;
+    document.GetElementById(green+"-2")->Focus();
+    event.gbutton.button=SDL_GAMEPAD_BUTTON_NORTH; feed(event);
+    if (launcher.controls_settings().bindings[size_t(A::note1)][2].kind!=st::input::Kind::none) return false;
+    // Controller menu navigation must activate native controls without a pointer.
+    document.GetElementById("controls-keyboard")->Focus();
+    event.gbutton.button=SDL_GAMEPAD_BUTTON_SOUTH;
+    st::gamepad_menu_input(context,event);
+    event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; st::gamepad_menu_input(context,event);
+    if (!document.GetElementById("controls-keyboard")->IsClassSet("selected")) return false;
+    // Tab traversal through the controller route must reach bindings inside the scroll area.
+    form("controls-group").SetValue("general");
+    click("controls-gamepad");
+    if (!draw()) return false;
+    document.GetElementById("binding-0-2")->Focus();
+    const std::string last="binding-"+std::to_string(size_t(A::fast))+"-3";
+    for (int step=0; step<50 && (!context.GetFocusElement() || context.GetFocusElement()->GetId()!=last); ++step) {
+        event.type=SDL_EVENT_GAMEPAD_BUTTON_DOWN; event.gbutton.button=SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+        st::gamepad_menu_input(context,event);
+        event.type=SDL_EVENT_GAMEPAD_BUTTON_UP; st::gamepad_menu_input(context,event);
+    }
+    if (!context.GetFocusElement() || context.GetFocusElement()->GetId()!=last) return false;
+    launcher.save_controls({}); launcher.update();
+    click("controls-gamepad"); click("controls-reset");
+    if (launcher.controls_settings()!=st::input::Controls{} || !draw()) return false;
+    click("tab-screens");
+    return true;
 }
 
 int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previews, const fs::path& game_smoke) {
@@ -802,8 +938,11 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
     if (!document) return 1;
     auto* pause_document = context->LoadDocument(path_to_utf8(assets / "pause.rml"));
     if (!pause_document) return 1;
-    Launcher launcher(*document, window.window(), checkout, smoke_test || !game_smoke.empty() ? fs::path{} :
+    Launcher launcher(*document, window, checkout, smoke_test || !game_smoke.empty() ? fs::path{} :
                       path_from_utf8(pref.get()) / "launcher.cfg");
+    window.set_input_filter([&](const SDL_Event& event) {
+        return launcher.input(event) || st::gamepad_menu_input(*context,event);
+    });
     PauseMenu pause(*context, *pause_document, window, launcher);
     document->Show();
     if (!game_smoke.empty()) {
@@ -893,11 +1032,21 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
                                          std::pair{"tab-map", "secondary-size"},
                                          std::pair{"tab-features", "unify-cutscenes"},
                                          std::pair{"tab-audio", "master-volume"},
+                                         std::pair{"tab-controls", "controls-group"},
                                          std::pair{"tab-screens", "screen-layout"}}) {
             document->GetElementById(tab)->DispatchEvent(Rml::EventId::Click, {});
             if (!window.draw(*context) || !document->GetElementById(field)->IsVisible(true)) return 11;
-            if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, {})) return 12;
+            if (!check_layout(window, *context, *document, kWidth, kHeight, false, std::string_view(tab) == "tab-controls", {})) return std::fprintf(stderr, "Layout smoke failed on %s\n", tab), 12;
         }
+        if (!check_controls_menu(*document,launcher,*context,[&](SDL_Event& e) { launcher.input(e); },
+                [&] { return window.draw(*context); }, [&] {
+                    return window.draw(*context,previews.empty() ? nullptr : path_to_utf8(preview("controls-conflict.bmp")).c_str());
+                })) return 19;
+        document->GetElementById("tab-controls")->DispatchEvent(Rml::EventId::Click,{});
+        static_cast<Rml::ElementFormControl&>(*document->GetElementById("controls-group")).SetValue("instrument");
+        if (!window.draw(*context,previews.empty() ? nullptr : path_to_utf8(preview("controls-wide.bmp")).c_str())) return 19;
+        if (!check_layout(window,*context,*document,420,780,true,true,preview("controls-compact.bmp"))) return 19;
+        document->GetElementById("tab-screens")->DispatchEvent(Rml::EventId::Click,{});
         if (!check_layout(window, *context, *document, 420, 780, true, false, preview("launcher-compact.bmp"))) return 5;
         if (!check_layout(window, *context, *document, 390, 300, true, true, {})) return 6;
         document->GetElementById("tab-map")->DispatchEvent(Rml::EventId::Click, {});
@@ -993,6 +1142,15 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         if (!window.present_game(tiles.data(), false, false, false)) return 18;
         if (!previews.empty() && !window.save_game_preview(path_to_utf8(previews / "single-hidden.bmp").c_str())) return 18;
         pause.open();
+        if (!check_controls_menu(*pause_document,launcher,*context,[&](SDL_Event& e) { pause.input(e); },
+                [&] { return pause.draw(); }, [&] {
+                    return window.draw_pause(*context,previews.empty() ? nullptr : path_to_utf8(preview("controls-conflict-pause.bmp")).c_str());
+                })) return 19;
+        pause_document->GetElementById("tab-controls")->DispatchEvent(Rml::EventId::Click,{});
+        static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("controls-group")).SetValue("instrument");
+        if (!pause.draw()) return 19;
+        if (!previews.empty() && !window.draw_pause(*context,path_to_utf8(preview("controls-pause.bmp")).c_str())) return 19;
+        pause_document->GetElementById("tab-screens")->DispatchEvent(Rml::EventId::Click,{});
         if (window.pause_on_menu() || launcher.pause_on_menu() ||
             pause_document->GetElementById("pause-title")->GetInnerRML() != "Menu") return 17;
         pause_document->GetElementById("pause-mode")->DispatchEvent(Rml::EventId::Click, {});

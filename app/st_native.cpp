@@ -94,9 +94,15 @@
 #include "audio/audio_devices.hpp"
 #include "audio/mic_source.hpp"
 #include "game_session.hpp"
+#include "input/gamepads.hpp"
+#include "input/controller_replay.hpp"
 #include "name_keyboard.hpp"
 #include "present/gl_frame_bridge.hpp"
 #include "present/internal_resolution.hpp"
+#include "menu_controls.hpp"
+#include "title_caption.hpp"
+#include "menu_art.hpp"
+#include "menu_cue.hpp"
 #include "screen_context.hpp"
 #include "st_hooks.hpp"
 #include "st_probe.hpp"
@@ -301,12 +307,17 @@ struct Shared {
     std::vector<uint32_t> pixels = std::vector<uint32_t>(kW * kH * 2);
     int pixel_scale = 1;
     bool fresh = false, shared_scene = false, cinematic = false;
+    st::GameMenu frame_menu = st::GameMenu::none;
     uint64_t frame_number = 0, published_ns = 0;
     uint32_t frame_event = 0;
     std::atomic<double> cinematic_aspect{0};
     std::atomic<uint32_t> screen_features{st::ScreenEnhancements{}.mask()};
     std::atomic<uint32_t> held{0}, pressed{0};
     std::atomic<int> touch_x{0}, touch_y{0};
+    std::atomic<int> menu_touch_frames{0};
+    std::atomic<bool> cancel_menu_touch{false};
+    std::atomic<st::GameMenu> game_menu{st::GameMenu::none};
+    std::atomic<bool> skip_prologue{false};
     std::atomic<bool> touching{false}, blowing{false}, fast{false}, quit{false}, done{false};
     std::mutex pause_mutex;
     std::condition_variable pause_cv;
@@ -369,6 +380,8 @@ public:
             std::lock_guard lock(audio_mutex_);
             audio_paused_ = paused;
             audio_started_ = false;
+            menu_cue_requested_ = false;
+            menu_cue_cursor_ = menu_cue_.size();
             if (audio_) {
                 SDL_PauseAudioStreamDevice(audio_.get());
                 SDL_ClearAudioStream(audio_.get());
@@ -402,6 +415,22 @@ public:
                          (unsigned long long)f.ram_hash);
         if (!o_.control.empty() && !control(f)) return false;
         const bool detected_scene = track_scene_ && screen_context_.update(*rt_, f, frame_);
+        auto game_menu = track_scene_ ? screen_context_.menu(*rt_, f, name_keyboard.active()) : st::GameMenu::none;
+        // The opening context is verified independently. Alpha here only determines whether
+        // the existing prompt's 2D layer needs replacement; it never classifies a game scene.
+        const bool opening = track_scene_ && screen_context_.scene() == st::CinematicScene::opening;
+        if (!opening) title_prompt_seen_ = false;
+        if (opening && !title_prompt_seen_)
+            for (const auto* layer : {f.foreground_bottom,f.foreground_top}) {
+                if (!layer) continue;
+                for (int y = 136; y < 158 && !title_prompt_seen_; ++y)
+                    for (int x = 16; x < 240; ++x)
+                        if (layer[y*kW+x] >> 24) { title_prompt_seen_ = true; break; }
+            }
+        // The DS alternates capture targets and blinks its caption. Keep the replacement stable
+        // after its first visible foreground, and release it with the verified opening context.
+        if (opening) game_menu = title_prompt_seen_ ? st::GameMenu::title : st::GameMenu::opening;
+        sh_.game_menu = game_menu;
         const auto feature = screen_context_.narration() ? st::ScreenFeature::subtitles :
             screen_context_.touch_only() ? st::ScreenFeature::hide_secondary : st::ScreenFeature::cutscenes;
         const auto enabled_features = o_.headless ? o_.screen_features : sh_.screen_features.load();
@@ -576,8 +605,26 @@ public:
         pace();
         held |= sh_.held.load();
         pressed |= sh_.pressed.exchange(0);
+        if (game_menu != st::GameMenu::prologue || sh_.cancel_menu_touch.load()) prologue_skip_ = 0;
+        if (sh_.skip_prologue.exchange(false) && game_menu == st::GameMenu::prologue) {
+            prologue_skip_ = 16;
+            pressed |= st::input::bit(st::input::Action::start);
+        }
+        if (prologue_skip_ > 10) held |= st::input::bit(st::input::Action::start);
         rt_->set_buttons(held, pressed);
         if (!touch && sh_.touching) touch = true, tx = sh_.touch_x, ty = sh_.touch_y;
+        if (sh_.cancel_menu_touch.exchange(false)) menu_touch_frames_ = 0;
+        menu_touch_frames_ = std::max(menu_touch_frames_,sh_.menu_touch_frames.exchange(0));
+        if (menu_touch_frames_ > 0) {
+            if (!touch) touch = true, tx = sh_.touch_x, ty = sh_.touch_y;
+            --menu_touch_frames_;
+        }
+        // The game's Start reveals Skip. After a few guest frames, activate that
+        // control while the same narrated scene is still active.
+        if (prologue_skip_ > 0) {
+            if (!touch && prologue_skip_ <= 6) { touch = true; tx = 235; ty = 10; }
+            --prologue_skip_;
+        }
         if (touch) rt_->touch(tx, ty), touched_ = true;
         else if (touched_) rt_->release_touch(), touched_ = false;
         blow = blow || sh_.blowing.load();
@@ -595,16 +642,42 @@ public:
         return lines;
     }
 
+    void set_menu_cue(std::vector<int16_t> samples) {
+        menu_cue_ = std::move(samples);
+        menu_cue_cursor_ = menu_cue_.size();
+    }
+
+    void play_menu_cue() { menu_cue_requested_ = true; }
+    uint64_t menu_cue_count() const { return menu_cue_count_; } // read after the game thread joins
+
     void on_audio(const int16_t* samples, size_t frames) override {
         std::lock_guard lock(audio_mutex_);
-        if (!audio_ || audio_paused_) return;
+        const bool cue_requested = menu_cue_requested_.exchange(false);
+        if (!audio_ || audio_paused_) {
+            menu_cue_cursor_ = menu_cue_.size();
+            return;
+        }
         const int queued = SDL_GetAudioStreamQueued(audio_.get());
         if (profile_ && audio_started_ && frame_ >= 180 && queued == 0) ++audio_empty_feeds_;
+        if (cue_requested && !menu_cue_.empty()) menu_cue_cursor_ = 0;
         if (queued > 48000 * 4 / 10) { // keep latency bounded (~100 ms)
             audio_dropped_samples_ += frames;
             return;
         }
-        SDL_PutAudioStreamData(audio_.get(), samples, int(frames * 4));
+        const bool starts_cue = frames && !menu_cue_.empty() && menu_cue_cursor_ == 0;
+        if (menu_cue_cursor_ < menu_cue_.size()) {
+            audio_mix_.assign(samples,samples+2*frames);
+            for (size_t i = 0; i < frames && menu_cue_cursor_ < menu_cue_.size(); ++i) {
+                const int cue = menu_cue_[menu_cue_cursor_++];
+                for (size_t channel = 0; channel < 2; ++channel) {
+                    auto& sample = audio_mix_[i*2+channel];
+                    sample = int16_t(std::clamp(int(sample)+cue,-32768,32767));
+                }
+            }
+            samples = audio_mix_.data();
+        }
+        if (SDL_PutAudioStreamData(audio_.get(), samples, int(frames * 4)) && starts_cue)
+            ++menu_cue_count_;
         // Prime 50 ms before playback (also after resuming). Short scheduling hitches can then
         // consume queued samples instead of immediately starving the device. Sustained slow
         // execution still needs a rendering fix; increasing the buffer cannot repair it.
@@ -748,6 +821,9 @@ private:
     st::OffscreenGlContext* offscreen_gl_ = nullptr;
     int applied_internal_scale_ = 1;
     std::vector<uint32_t> cli_top_, cli_bottom_;
+    int menu_touch_frames_ = 0;
+    bool title_prompt_seen_ = false;
+    int prologue_skip_ = 0;
     st::ScreenContext screen_context_;
     std::array<uint32_t, kW * kH> narration_pixels_{};
     ntr::Runtime* rt_ = nullptr;
@@ -755,6 +831,10 @@ private:
     st::AudioSettings audio_settings_;
     st::MicSource mic_;
     std::mutex audio_mutex_;
+    std::vector<int16_t> menu_cue_, audio_mix_;
+    size_t menu_cue_cursor_ = 0;
+    uint64_t menu_cue_count_ = 0;
+    std::atomic<bool> menu_cue_requested_{false};
     bool audio_enabled_ = false, window_focused_ = true, audio_started_ = false, audio_paused_ = false;
     std::ostream* profile_ = nullptr;
     std::ostream* mic_profile_ = nullptr;
@@ -945,42 +1025,6 @@ bool parse_args(int argc, char** argv, Options& o) {
     return true;
 }
 
-uint32_t key_for(SDL_Scancode sc) {
-    switch (sc) {
-    case SDL_SCANCODE_UP: return kUp;
-    case SDL_SCANCODE_DOWN: return kDown;
-    case SDL_SCANCODE_LEFT: return kLeft;
-    case SDL_SCANCODE_RIGHT: return kRight;
-    case SDL_SCANCODE_X: return kA;
-    case SDL_SCANCODE_Z: return kB;
-    case SDL_SCANCODE_S: return kX;
-    case SDL_SCANCODE_A: return kY;
-    case SDL_SCANCODE_Q: return kL;
-    case SDL_SCANCODE_W: return kR;
-    case SDL_SCANCODE_RETURN: return kStart;
-    case SDL_SCANCODE_BACKSPACE: return kSelect;
-    default: return 0;
-    }
-}
-
-uint32_t pad_key_for(Uint8 b) {
-    switch (SDL_GamepadButton(b)) {
-    case SDL_GAMEPAD_BUTTON_EAST: return kA;  // by position, as on the DS: A right, B bottom, X top, Y left
-    case SDL_GAMEPAD_BUTTON_SOUTH: return kB;
-    case SDL_GAMEPAD_BUTTON_NORTH: return kX;
-    case SDL_GAMEPAD_BUTTON_WEST: return kY;
-    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return kL;
-    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return kR;
-    case SDL_GAMEPAD_BUTTON_START: return kStart;
-    case SDL_GAMEPAD_BUTTON_BACK: return kSelect;
-    case SDL_GAMEPAD_BUTTON_DPAD_UP: return kUp;
-    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return kDown;
-    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return kLeft;
-    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return kRight;
-    default: return 0;
-    }
-}
-
 }  // namespace
 
 static int run_game(Options o, st::GamePresentation* presentation, st::GamePauseMenu* menu,
@@ -1101,6 +1145,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         if (event != Uint32(-1)) sh.frame_event = event;
     }
     StHost host(o, sh, std::move(script), hashes, mic_log.get(), ro.cinematic_camera, presentation);
+    st::MenuArt menu_art;
+    if (presentation) {
+        menu_art.load(rom,o.language);
+        host.set_menu_cue(st::load_menu_cue(rom));
+    }
+    if (presentation && presentation->controls_settings().game_menus && !st::TitleCaption{}.apply(rom,o.language))
+        std::fprintf(stderr,"Title caption resource does not fit its verified layout\n");
     if (mic_profile.is_open()) host.set_mic_profile(&mic_profile);
     if (frame_profile.is_open()) host.set_profile(&frame_profile);
     if (scene_profile.is_open()) host.set_scene_profile(&scene_profile, code);
@@ -1172,9 +1223,33 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     bool saw_shared_scene = false, saw_cinematic = false;
     int test_stage = 0;
     if (!o.headless) {
-        uint32_t kb = 0, pad = 0, stick = 0;
-        bool kb_blow = false, pad_blow = false, trig_blow = false;
+        st::input::State input;
+        input.settings = presentation ? presentation->controls_settings() : st::input::Controls{};
+        std::unique_ptr<st::input::Gamepads> cli_gamepads;
+        if (!presentation) cli_gamepads = std::make_unique<st::input::Gamepads>();
+        auto active_pad = [&] { return presentation ? presentation->active_gamepad() : cli_gamepads->active(); };
+        auto pad_id = active_pad();
+        uint32_t previous_actions = 0;
+        bool window_focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+        bool editing_name = false;
         bool mouse_down = false;
+        st::MenuFocus menu_focus;
+        std::vector<st::input::ControllerStep> controller_replay;
+        size_t controller_step = 0;
+        fs::path controller_shots;
+        std::string controller_shot;
+        std::ofstream controller_profile;
+        if (test_menu_after) {
+            if (const auto* path = std::getenv("ST_NATIVE_SMOKE_CONTROLLER")) {
+                try { controller_replay = st::input::read_controller_replay(path_from_utf8(path)); }
+                catch (const std::exception& error) { std::fprintf(stderr,"%s\n",error.what()); view_error = sh.quit = true; }
+            }
+            if (const auto* path = std::getenv("ST_NATIVE_SMOKE_CONTROLLER_SHOTS")) controller_shots = path_from_utf8(path);
+            if (const auto* path = std::getenv("ST_NATIVE_SMOKE_INPUT_PROFILE")) {
+                controller_profile.open(path_from_utf8(path));
+                controller_profile << "frame,shot,game_menu,name_active,title_prompt,focus_x,focus_y\n";
+            }
+        }
         bool menu_open = false, game_paused = false;
         uint64_t applied_audio_rev = presentation ? presentation->audio_revision() : 0;
         uint64_t presented_frames = 0, previous_present_ns = 0;
@@ -1193,11 +1268,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
 
         auto change_menu = [&](bool open) {
             if (presentation) presentation->peek_secondary(false);
-            kb = pad = stick = 0;
-            kb_blow = pad_blow = trig_blow = false;
+            input.clear(); previous_actions = 0;
             mouse_down = false;
             sh.held = sh.pressed = 0;
             sh.touching = sh.blowing = sh.fast = false;
+            sh.menu_touch_frames = 0;
+            sh.cancel_menu_touch = true;
+            menu_focus.hide();
             host.name_keyboard.discard_pending();
             if (open && SDL_TextInputActive(window)) SDL_StopTextInput(window);
             const bool was_paused = game_paused;
@@ -1215,6 +1292,13 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             else menu->close();
         };
 
+        auto move_focus = [&](uint32_t actions) {
+            using A = st::input::Action;
+            const auto held = [actions](A action) { return int(bool(actions & st::input::bit(action))); };
+            if (menu_focus.move(held(A::right)-held(A::left), held(A::down)-held(A::up), SDL_GetTicks()))
+                host.play_menu_cue();
+        };
+
         auto test_key = [&](SDL_Scancode scancode, SDL_Keycode keycode, bool down = true) {
             SDL_Event key{};
             key.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
@@ -1225,7 +1309,38 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             if (!SDL_PushEvent(&key)) view_error = sh.quit = true;
         };
         while (!sh.done) {
+            uint64_t input_frame = 0;
+            if (!controller_replay.empty()) {
+                { std::lock_guard lock(sh.m); input_frame = sh.frame_number; }
+                while (controller_step < controller_replay.size() && controller_replay[controller_step].frame <= input_frame) {
+                    auto s = controller_replay[controller_step++];
+                    if (!s.shot.empty()) controller_shot = s.shot;
+                    else {
+                        if (s.event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) s.event.gaxis.which = active_pad();
+                        else if (s.event.type == SDL_EVENT_KEY_DOWN || s.event.type == SDL_EVENT_KEY_UP)
+                            s.event.key.windowID = SDL_GetWindowID(window);
+                        else s.event.gbutton.which = active_pad();
+                        if (!SDL_PushEvent(&s.event)) view_error = sh.quit = true;
+                    }
+                }
+            }
+            const auto game_menu = input.settings.game_menus && presentation && !menu_open ? sh.game_menu.load() : st::GameMenu::none;
+            if (menu_focus.context(game_menu)) {
+                input.context(game_menu == st::GameMenu::name ? st::input::Context::name_keyboard :
+                    menu_focus.active() ? st::input::Context::game_menu :
+                    game_menu == st::GameMenu::prologue ? st::input::Context::cutscene : st::input::Context::gameplay);
+                input.clear(); previous_actions = 0; mouse_down = false;
+                sh.held = sh.pressed = 0; sh.touching = false; sh.menu_touch_frames = 0;
+                sh.cancel_menu_touch = true;
+            }
             if (presentation) {
+                const auto controls = presentation->controls_settings();
+                if (controls != input.settings) {
+                    input.settings = controls; input.clear(); previous_actions = 0;
+                    mouse_down = false; sh.held = sh.pressed = 0; sh.touching = sh.blowing = sh.fast = false;
+                    sh.menu_touch_frames = 0; sh.cancel_menu_touch = true;
+                    presentation->peek_secondary(false);
+                }
                 const uint64_t audio_rev = presentation->audio_revision();
                 if (audio_rev != applied_audio_rev) {
                     applied_audio_rev = audio_rev;
@@ -1235,6 +1350,10 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 sh.screen_features = presentation->screen_features();
                 const bool edit_name = !menu_open && (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) &&
                                        host.name_keyboard.active();
+                if (editing_name != edit_name) {
+                    editing_name = edit_name; input.clear(); previous_actions = 0;
+                    mouse_down = false; sh.held = sh.pressed = 0; sh.touching = sh.blowing = sh.fast = false;
+                }
                 if (edit_name && !SDL_TextInputActive(window)) SDL_StartTextInput(window);
                 if (!edit_name && SDL_TextInputActive(window)) SDL_StopTextInput(window);
             }
@@ -1246,6 +1365,18 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         sh.quit = true;
                         break;
                     }
+                    if (presentation) presentation->observe_input(e); else cli_gamepads->event(e);
+                    if (active_pad() != pad_id || e.type == SDL_EVENT_GAMEPAD_REMOVED || e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                        pad_id = active_pad(); input.clear(); previous_actions = 0;
+                        mouse_down = false; sh.held = sh.pressed = 0; sh.touching = sh.blowing = sh.fast = false;
+                        if (presentation) presentation->peek_secondary(false);
+                    }
+                    if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) window_focused = true;
+                    if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) window_focused = false;
+                    if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST || e.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                        sh.menu_touch_frames = 0; menu_focus.hide();
+                        sh.cancel_menu_touch = true;
+                    }
                     if (e.type == SDL_EVENT_WINDOW_FOCUS_GAINED) host.set_window_focused(true);
                     else if (e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                         host.set_window_focused(false);
@@ -1253,12 +1384,19 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     }
                     else if (e.type == SDL_EVENT_AUDIO_DEVICE_ADDED || e.type == SDL_EVENT_AUDIO_DEVICE_REMOVED)
                         host.refresh_audio_devices();
-                    if (menu && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
-                        (e.key.scancode == SDL_SCANCODE_ESCAPE || e.key.scancode == SDL_SCANCODE_F1)) {
+                    // The explicit developer smoke path injects events into a hidden window.
+                    // Ordinary gameplay must ignore background input after releasing held state.
+                    if (!window_focused && !test_menu_after) {
+                        if (menu_open && (e.type == SDL_EVENT_WINDOW_FOCUS_LOST || e.type == SDL_EVENT_GAMEPAD_REMOVED)) menu->input(e);
+                        continue;
+                    }
+                    const bool recovery_menu = e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                        (e.key.scancode == SDL_SCANCODE_ESCAPE || e.key.scancode == SDL_SCANCODE_F1);
+                    if (menu && recovery_menu && !(menu_open && menu->capturing_input())) {
                         change_menu(!menu_open);
                         continue;
                     }
-                    if (presentation && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
+                    if (presentation && !(menu_open && menu->capturing_input()) && e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat &&
                         e.key.scancode == SDL_SCANCODE_F2) {
                         mouse_down = false;
                         sh.touching = false;
@@ -1266,6 +1404,14 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         continue;
                     }
                     if (menu_open) {
+                        if (!menu->capturing_input()) {
+                            input.event(e);
+                            const auto actions = input.actions();
+                            if ((actions & ~previous_actions) & st::input::bit(st::input::Action::menu)) {
+                                change_menu(false); continue;
+                            }
+                            previous_actions = actions;
+                        }
                         menu->input(e);
                         switch (menu->action()) {
                         case st::PauseAction::leave: sh.quit = true; break;
@@ -1274,93 +1420,131 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                         }
                         continue;
                     }
-                    if (presentation && (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP) &&
-                        e.key.scancode == SDL_SCANCODE_M && !SDL_TextInputActive(window)) {
-                        if (!e.key.repeat) {
-                            mouse_down = false;
-                            sh.touching = false;
-                            presentation->peek_secondary(e.type == SDL_EVENT_KEY_DOWN);
-                        }
+                    if (e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
+                        mouse_down = false; sh.touching = false;
+                    }
+                    if (e.type == SDL_EVENT_MOUSE_MOTION || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) menu_focus.hide();
+                    if (e.type == SDL_EVENT_TEXT_INPUT) {
+                        if (presentation && SDL_TextInputActive(window)) queue_name_text(host.name_keyboard, e.text.text);
                         continue;
                     }
-                    switch (e.type) {
-                    case SDL_EVENT_WINDOW_FOCUS_LOST:
-                        kb = 0; kb_blow = false; mouse_down = false; sh.touching = false; sh.fast = false;
-                        break;
-                    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
-                        if (presentation) mouse_down = sh.touching = false;
-                        break;
-                    case SDL_EVENT_TEXT_INPUT:
-                        if (presentation && SDL_TextInputActive(window)) queue_name_text(host.name_keyboard, e.text.text);
-                        break;
-                    case SDL_EVENT_KEY_DOWN:
-                        if (presentation && SDL_TextInputActive(window) && e.key.scancode == SDL_SCANCODE_BACKSPACE)
+                    if (e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat && e.key.scancode == SDL_SCANCODE_F11) {
+                        SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+                        continue;
+                    }
+                    if (presentation && SDL_TextInputActive(window) &&
+                        (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_KEY_UP)) {
+                        if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_BACKSPACE)
                             host.name_keyboard.queue(st::NameKeyboard::backspace);
-                        else if (presentation && SDL_TextInputActive(window) && e.key.scancode == SDL_SCANCODE_A &&
+                        else if (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode == SDL_SCANCODE_A &&
                                  (e.key.mod & SDL_KMOD_CTRL) && !e.key.repeat)
                             host.name_keyboard.queue(st::NameKeyboard::select_all);
-                        else if (e.key.scancode == SDL_SCANCODE_F11 && !e.key.repeat)
-                            SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
-                        else if (presentation && SDL_TextInputActive(window)) break;
-                        else if (e.key.scancode == SDL_SCANCODE_TAB) sh.fast = true;
-                        else if (e.key.scancode == SDL_SCANCODE_SPACE || e.key.scancode == SDL_SCANCODE_C) kb_blow = true;
-                        else if (const uint32_t b = key_for(e.key.scancode)) {
-                            kb |= b;
-                            if (!e.key.repeat) sh.pressed |= b;
-                        }
-                        break;
-                    case SDL_EVENT_KEY_UP:
-                        if (e.key.scancode == SDL_SCANCODE_TAB) sh.fast = false;
-                        if (e.key.scancode == SDL_SCANCODE_SPACE || e.key.scancode == SDL_SCANCODE_C) kb_blow = false;
-                        kb &= ~key_for(e.key.scancode);
-                        break;
-                    case SDL_EVENT_GAMEPAD_ADDED: SDL_OpenGamepad(e.gdevice.which); break;
-                    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-                        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) pad_blow = true;
-                        else if (const uint32_t b = pad_key_for(e.gbutton.button)) pad |= b, sh.pressed |= b;
-                        break;
-                    case SDL_EVENT_GAMEPAD_BUTTON_UP:
-                        if (e.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) pad_blow = false;
-                        else pad &= ~pad_key_for(e.gbutton.button);
-                        break;
-                    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-                        if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX)
-                            stick = (stick & ~(kLeft | kRight)) | (e.gaxis.value < -16000 ? kLeft : 0) |
-                                    (e.gaxis.value > 16000 ? kRight : 0);
-                        else if (e.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTY)
-                            stick = (stick & ~(kUp | kDown)) | (e.gaxis.value < -16000 ? kUp : 0) |
-                                    (e.gaxis.value > 16000 ? kDown : 0);
-                        else if (e.gaxis.axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)
-                            trig_blow = e.gaxis.value > 8000;
-                        break;
-                    case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                    case SDL_EVENT_MOUSE_BUTTON_UP:
-                    case SDL_EVENT_MOUSE_MOTION: {
-                        if (renderer) SDL_ConvertEventToRenderCoordinates(renderer.get(), &e);
-                        float x = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.x : e.button.x;
-                        float y = e.type == SDL_EVENT_MOUSE_MOTION ? e.motion.y : e.button.y;
-                        if (presentation && !presentation->game_coordinates(x, y, mouse_down)) {
-                            mouse_down = false;
-                            sh.touching = false;
-                            break;
-                        }
-                        if (!presentation) y -= kH;
-                        if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && e.button.button == SDL_BUTTON_LEFT)
-                            mouse_down = x >= 0 && x < kW && y >= 0 && y < kH;
-                        if (e.type == SDL_EVENT_MOUSE_BUTTON_UP && e.button.button == SDL_BUTTON_LEFT) mouse_down = false;
-                        if (mouse_down) {
-                            sh.touch_x = std::clamp(int(x), 0, kW - 1);
-                            sh.touch_y = std::clamp(int(y), 0, kH - 1);
-                        }
-                        sh.touching = mouse_down;
-                        break;
+                        // Native text goes through SDL; navigation/accept keys still reach the menu adapter.
+                        if (e.key.scancode != SDL_SCANCODE_RETURN && e.key.scancode != SDL_SCANCODE_DELETE &&
+                            (e.key.scancode < SDL_SCANCODE_RIGHT || e.key.scancode > SDL_SCANCODE_UP)) continue;
                     }
-                    default: break;
+                    if ((!window_focused && !test_menu_after) || (e.type == SDL_EVENT_KEY_DOWN && e.key.repeat)) continue;
+                    if ((e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_UP) &&
+                        e.gbutton.which != pad_id) continue;
+                    if (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && e.gaxis.which != pad_id) continue;
+                    input.event(e);
+                    using A = st::input::Action;
+                    const auto actions = input.actions();
+                    const auto rising = actions & ~previous_actions;
+                    const auto changed = actions ^ previous_actions;
+                    previous_actions = actions;
+                    if (menu && (rising & st::input::bit(A::menu))) { change_menu(true); continue; }
+                    auto tap_menu = [&](int x, int y) {
+                        mouse_down = false; sh.touching = false;
+                        sh.touch_x = x; sh.touch_y = y; sh.menu_touch_frames = 6;
+                    };
+                    const bool button_press = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                        (e.type == SDL_EVENT_KEY_DOWN && e.key.scancode != SDL_SCANCODE_UNKNOWN &&
+                         e.key.scancode < SDL_SCANCODE_LCTRL);
+                    const auto view_shortcuts = st::input::bit(A::original_view) | st::input::bit(A::map) |
+                                                st::input::bit(A::fast);
+                    if ((game_menu == st::GameMenu::title || game_menu == st::GameMenu::opening) &&
+                        button_press && !(rising & view_shortcuts)) {
+                        if (game_menu == st::GameMenu::title) tap_menu(128,160);
+                        else sh.pressed |= st::input::bit(A::start);
+                        sh.held = 0;
+                        input.clear(); previous_actions = 0;
+                        continue;
                     }
+                    if (game_menu == st::GameMenu::prologue && (rising & st::input::bit(A::skip_cutscene))) {
+                        sh.skip_prologue = true;
+                        continue;
+                    }
+                    if (presentation && (rising & st::input::bit(A::original_view))) {
+                        mouse_down = false; sh.touching = false;
+                        presentation->toggle_classic_layout();
+                    }
+                    if (presentation && (changed & st::input::bit(A::map))) {
+                        mouse_down = false; sh.touching = false;
+                        presentation->peek_secondary((actions & st::input::bit(A::map)) != 0);
+                    }
+                    if (menu_focus.active()) {
+                        move_focus(actions);
+                        const auto tap_item = [&](st::MenuItem item) { tap_menu(item.center_x(),item.center_y()); };
+                        if (rising & st::input::bit(A::menu_back)) {
+                            if (game_menu == st::GameMenu::name) tap_menu(64,176);
+                            else if (const auto item = st::menu_back_item(game_menu)) tap_item(*item);
+                            else sh.pressed |= st::input::bit(A::b);
+                        } else if (st::option_value(game_menu,menu_focus.index())) {
+                            const bool left = rising & st::input::bit(A::left);
+                            const bool next = rising & (st::input::bit(A::right) | st::input::bit(A::menu_accept));
+                            if (left != next) {
+                                menu_focus.select();
+                                tap_item(st::option_arrow(menu_focus.index(),left ? -1 : 1));
+                            }
+                        } else if (rising & st::input::bit(A::menu_accept)) {
+                            menu_focus.select();
+                            if (const auto* item = menu_focus.item()) tap_item(*item);
+                        }
+                        if (game_menu == st::GameMenu::name) {
+                            if (rising & st::input::bit(A::start)) tap_menu(190,176);
+                            if (rising & st::input::bit(A::name_erase)) host.name_keyboard.queue(st::NameKeyboard::backspace);
+                            if (rising & st::input::bit(A::name_clear)) {
+                                host.name_keyboard.queue(st::NameKeyboard::select_all);
+                                host.name_keyboard.queue(st::NameKeyboard::backspace);
+                            }
+                        } else sh.pressed |= rising & st::input::bit(A::start);
+                        sh.held = 0;
+                    } else {
+                        sh.pressed |= rising & 0xfff;
+                        sh.held = actions & 0xfff;
+                    }
+                    sh.blowing = (actions & st::input::bit(A::blow)) != 0;
+                    sh.fast = (actions & st::input::bit(A::fast)) != 0;
+
+                    // Resolve pointer capture only when the touch action begins inside the view.
+                    // Keyboard/controller touch bindings use the current mouse position as well.
+                    if (!(actions & st::input::bit(A::touch))) mouse_down = false;
+                    if (mouse_down || (rising & st::input::bit(A::touch))) {
+                        SDL_Event pointer{};
+                        pointer.type = SDL_EVENT_MOUSE_MOTION;
+                        pointer.motion.windowID = SDL_GetWindowID(window);
+                        SDL_GetMouseState(&pointer.motion.x,&pointer.motion.y);
+                        if (e.type == SDL_EVENT_MOUSE_MOTION) {
+                            pointer.motion.x = e.motion.x; pointer.motion.y = e.motion.y;
+                        } else if (e.type == SDL_EVENT_MOUSE_BUTTON_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                            pointer.motion.x = e.button.x; pointer.motion.y = e.button.y;
+                        }
+                        if (renderer) SDL_ConvertEventToRenderCoordinates(renderer.get(),&pointer);
+                        float x = pointer.motion.x, y = pointer.motion.y;
+                        bool hit = true;
+                        if (presentation) hit = presentation->game_coordinates(x,y,mouse_down);
+                        else { y -= kH; hit = mouse_down || (x >= 0 && x < kW && y >= 0 && y < kH); }
+                        if (hit) {
+                            mouse_down = true;
+                            sh.touch_x = std::clamp(int(x),0,kW-1);
+                            sh.touch_y = std::clamp(int(y),0,kH-1);
+                        } else mouse_down = false;
+                    }
+                    sh.touching = mouse_down;
                 } while (SDL_PollEvent(&e));
-                sh.held = kb | pad | stick;
-                sh.blowing = kb_blow || pad_blow || trig_blow;
             }
+            if (!menu_open && (window_focused || test_menu_after)) move_focus(input.actions());
             if (sh.quit) {
                 if (menu_open) change_menu(false);
                 sync_pause(false);
@@ -1387,7 +1571,14 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             const auto present_start = present_profile.is_open() ? SDL_GetTicksNS() : 0;
             if (presentation) {
                 st::PresentedFrameInfo info;
-                if (!presentation->present_published_game(mouse_down, info)) {
+                const st::SoftwareFrameOverlay overlay = [&](uint32_t* bottom, uint32_t* cinema, uint64_t) {
+                    if (game_menu != sh.game_menu.load()) return;
+                    if (const auto* item = menu_focus.visible_item()) {
+                        menu_art.draw(bottom, game_menu, menu_focus.index(), *item);
+                        if (cinema) menu_art.draw(cinema, game_menu, menu_focus.index(), *item);
+                    }
+                };
+                if (!presentation->present_published_game(mouse_down, info, true, overlay)) {
                     view_error = sh.quit = true;
                     continue;
                 }
@@ -1398,6 +1589,16 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 published_ns = info.published_ns;
                 shared_scene = info.shared_scene;
                 cinematic = info.cinematic;
+                if (!controller_shot.empty() && !controller_shots.empty()) {
+                    if (controller_profile) controller_profile << frame_number << ',' << controller_shot << ','
+                        << int(game_menu) << ',' << host.name_keyboard.active() << ','
+                        << (game_menu == st::GameMenu::title) << ','
+                        << (menu_focus.item() ? menu_focus.item()->center_x() : 0) << ','
+                        << (menu_focus.item() ? menu_focus.item()->center_y() : 0) << '\n';
+                    if (!presentation->save_game_preview(path_to_utf8(controller_shots / (controller_shot + ".bmp")).c_str()))
+                        view_error = sh.quit = true;
+                    controller_shot.clear();
+                }
             } else {
                 bool draw = false;
                 int frame_scale = 1;
@@ -1464,6 +1665,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     }
     if (presentation && SDL_TextInputActive(window)) SDL_StopTextInput(window);
     game.join();
+    if (test_menu_after) std::printf("menu focus cues queued: %llu\n", (unsigned long long)host.menu_cue_count());
     if (o.cinematic_aspect > 0)
         std::printf("cinematic: %llu frames reframed\n", (unsigned long long)host.cinematic_frames());
     if (!rc && (view_error || (test_menu_after && (test_stage != 4 ||
@@ -1520,11 +1722,15 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
         }
         if (const auto* script = std::getenv("ST_NATIVE_SMOKE_SCRIPT")) o.script = path_from_utf8(script);
         if (const auto* profile = std::getenv("ST_NATIVE_SMOKE_SCENE_PROFILE")) o.scene_profile = path_from_utf8(profile);
+        if (const auto* record = std::getenv("ST_NATIVE_SMOKE_RECORD")) o.record = path_from_utf8(record);
+        if (const auto* hashes = std::getenv("ST_NATIVE_SMOKE_HASHES")) o.hashes = path_from_utf8(hashes);
+        if (const auto* profile = std::getenv("ST_NATIVE_SMOKE_FRAME_PROFILE")) o.frame_profile = path_from_utf8(profile);
     }
     o.screen_features = launch.enhancements.mask();
     o.audio = launch.audio;
     presentation.set_screen_layout(launch.layout, launch.automatic_join, launch.enhancements);
     presentation.set_secondary_view(launch.secondary);
+    presentation.set_controls_settings(launch.controls);
     presentation.set_audio_settings(launch.audio);
     presentation.set_pause_on_menu(launch.pause_on_menu);
     presentation.set_internal_scale(launch.internal_scale);

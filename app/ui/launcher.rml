@@ -29,6 +29,7 @@
             <input type="submit" id="tab-features" value="Screen features" />
             <input type="submit" id="tab-audio" value="Audio" />
             <input type="submit" id="tab-graphics" value="Graphics" />
+            <input type="submit" id="tab-controls" value="Controls" />
             <input type="submit" id="tab-window" value="Window" />
             <input type="submit" id="tab-game" value="Game" />
           </div>
@@ -103,7 +104,7 @@
                 <option value="50">50%</option>
               </select>
             </div>
-            <p class="hint">Hold M to view the upper screen. F2 restores both original screens.</p>
+            <p id="map-shortcut" class="hint">Hold M to view the upper screen. F2 restores both original screens.</p>
           </div>
           <div id="settings-features" class="settings-page">
             <div class="field">
@@ -119,6 +120,7 @@
               <select id="hide-secondary"><option value="on">On</option><option value="off">Off</option></select>
             </div>
           </div>
+          <div id="settings-controls" class="settings-page"></div>
           <div id="settings-audio" class="settings-page">
             <div class="field">
               <label for="master-volume">Master volume</label>

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "ntr/runtime.hpp"
+#include "menu_controls.hpp"
 #include "screen_policy.hpp"
 
 namespace st {
@@ -53,6 +54,39 @@ public:
     bool narration() const { return policy_.scene() == CinematicScene::prologue; }
     bool touch_only() const { return policy_.scene() == CinematicScene::save_menu; }
     int narration_text_offset() const { return prologue_text_offset_y; }
+
+    GameMenu menu(ntr::Runtime& runtime, const ntr::Frame& frame, bool editing_name) const {
+        if (touch_only()) {
+            const auto phase = runtime.read_main_ram_word(0x022e560c);
+            const auto dialog = (runtime.read_main_ram_word(0x022610a4) >> 8) & 255;
+            auto detail = UINT32_MAX;
+            if (phase == 18 && dialog == 2) detail = runtime.read_main_ram_word(0x0226167c) & 0xffff;
+            if (phase == 18 && dialog == 4) detail = runtime.read_main_ram_word(0x022611e0) & 0xff;
+            if (phase == 22) detail = runtime.read_main_ram_word(0x022e9864);
+            return file_menu(phase,dialog,editing_name,detail);
+        }
+        if (narration()) return GameMenu::prologue;
+        if (frame.display_capture) return GameMenu::none;
+
+        // BKIE rev. 0. Touch replays from the mode menu distinguish Battle and Tag
+        // Mode via residency and display controls. Their top screens have content.
+        if (runtime.is_overlay_resident(5) && runtime.is_overlay_resident(20) && runtime.is_overlay_resident(101)) {
+            const auto display = runtime.inspect_graphics(false);
+            if (display.display_control[1] != 0x211c30) return GameMenu::none;
+            if (runtime.is_overlay_resident(22) && !display.screen_swap) {
+                if (display.display_control[0] == 0x211c18) return GameMenu::battle_list;
+                if (display.display_control[0] != 0x211818) return GameMenu::none;
+                // 0 at Create/Join, 1 on the shared waiting page, reset by either Back.
+                // Verified in separate Create Group and Join Group single-instance replays.
+                const auto waiting = runtime.read_main_ram_word(0x02049bb8);
+                if (waiting == 0) return GameMenu::battle;
+                if (waiting == 1) return GameMenu::battle_wait;
+            }
+            if (runtime.is_overlay_resident(23) && display.display_control[0] == 0x211d18 && display.screen_swap)
+                return GameMenu::tag;
+        }
+        return GameMenu::none;
+    }
 
 private:
     ScreenPolicy policy_;

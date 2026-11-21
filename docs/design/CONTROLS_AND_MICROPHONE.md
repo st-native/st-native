@@ -44,10 +44,11 @@ physical devices ──► actions (profile + bindings) ──► DS events / sc
 
 ### Controller-first requirements (maintainer, 2026-11-20)
 
-**Proposed; not implemented by this document.** The maintainer expects most players to use a gamepad. Give the
+**Requirement, with a bounded implementation below.** The maintainer expects most players to use a gamepad. Give the
 controller path the same complete gameplay coverage as keyboard/mouse, including configuration without a mouse.
-The current app has hardcoded basic DS mappings; a remapping interface, button-note integration and dynamic
-in-game glyphs are not yet shipped. The visual flute study is a proposal, not evidence of those features.
+The Controls foundation now implements remapping of the existing DS/utility actions and configuration of six
+instrument actions. Button-note gameplay and adapted in-game flute prompts remain open. The visual flute study
+is a proposal, not evidence of those features.
 
 - One **Controls** category in the launcher and Esc/F1 overlay, with **Keyboard & mouse** and **Controller** pages.
   Include a contextual **Flute** group rather than a separate binding system. Group actions by general play,
@@ -88,6 +89,104 @@ Acceptance: finish Gage using only gamepad notes, then keyboard notes; test quic
 rests, overlapping held buttons, cancellation and interruptions. Verify labels after remapping and each symbol
 override, including Nintendo's face positions. Release note/touch/breath on menu open, focus loss and device
 disconnect. Extend to solo songs and other duets before claiming campaign coverage.
+
+### Implemented foundation (2026-11-20; Windows execution verified)
+
+- Shared action/binding/state code in `app/input/controls.hpp`, SDL device ownership in `gamepads.hpp`, and one
+  `app/ui/controls_panel.hpp` used by the launcher and Esc/F1 overlay. No new dependency, engine patch or guest hook.
+- Keyboard/mouse and controller pages have primary/alternate capture, clearing, contextual conflict rejection and
+  reset per device. Settings persist in versioned `controls-v3` / `binding-v1` records in `launcher.cfg`; old files
+  load defaults, invalid/out-of-context bindings cannot activate, and conflicting sets recover to defaults.
+  The former `controls-v1` Start/Menu preset migrates to the game Start binding, preserving custom L3 bindings.
+- Existing DS buttons, touch/draw, virtual blow, upper-screen peek, menu, original view and fast-forward consume
+  this model in live input. Mouse buttons may be rebound. The left stick retains D-pad behavior with adjustable
+  dead zone; trigger bindings use the configured threshold. This does not implement analog Link movement or combat
+  gestures. The verified file and name menus support direct controller focus.
+- Six instrument bindings are saved and previewed but the live app keeps their context disabled until the flute
+  adapter is verified. Their resolver supports last-pressed priority and returning to a still-held note when a
+  newer one is released. It never chooses notes on the player's behalf.
+- Automatic device-type labels plus Xbox/PlayStation/Nintendo overrides are implemented as readable text
+  (`Cross`, `Square`, `L1`, etc.); illustrated glyph assets and adapted game prompts remain separate work.
+  Unknown devices use neutral face positions. Changing label style does not alter physical bindings. Map hints
+  in settings read the configured bindings rather than a fixed M key.
+- Connected controllers are enumerated on startup and handled on hotplug; deliberate button/large axis input
+  selects the active controller, ignoring small axis noise. Physical device coverage is not established by a
+  synthetic SDL controller test. Steam Input may expose a virtual device; manual label override remains available.
+- Gamepad D-pad up/down traverses menu focus, left/right adjusts controls, and the south face activates.
+  This describes the port's settings UI; the separate game-menu adapter is described below.
+  Start/Menu/Options/Plus sends **DS Start**, and Back/View/Share/Create/Minus sends **DS Select**.
+  L3 opens/closes the settings overlay by default and is remappable. Keyboard Enter/Backspace retain DS Start/Select.
+- Esc/F1 are fixed keyboard recovery routes. During capture Esc or the configured controller settings-menu
+  button cancels and Delete clears; while
+  focusing a binding, the controller's north face clears it without requiring a keyboard.
+  F11 is reserved for fullscreen; F2 remains the original-view recovery key. Focus loss, menu entry/exit,
+  controller removal/switch, name typing and changed settings clear held input instead of replaying stale presses.
+
+**Verification:** C++ tests cover conflicts, malformed bindings, alternate/device overlap, note priority,
+release/reset, dead zones, trigger thresholds, manufacturer labels and virtual-device lifecycle. Preference tests
+cover legacy files, remap swaps and damaged records. Launcher smoke checks the same editor in both menus:
+keyboard/controller rebinding, conflict cancellation, label overrides without rebinding and gamepad
+traversal/activation. A physical gamepad session and button-only Gage acceptance remain open.
+
+### PC game menus (2026-11-20)
+
+**Implemented:** **PC game menus** enables discrete focus on verified file, name and mode screens.
+In the verified option menus, focus changes the palette of the original artwork. A notice with one
+action keeps its original advance marker. D-pad or stick changes the selection, and the south face
+confirms through the game's existing action. Keyboard arrows and physical name entry also work.
+Start accepts the name, and L3 still opens port settings.
+
+- The train opening accepts a keyboard or controller button through the game's Start input. A separate
+  press activates the title. At launch, the PC option replaces only the title caption cell's indexed
+  tiles in the in-memory NitroFS resource. The original title palette, animated ribbon, feather and
+  credits are still drawn by the game. The original instruction is baked into an image. Reggae One
+  by Fontworks was the closest match in a local comparison of the original letter shapes. The
+  project's new phrases are rasterized at DS size from the open font. The exact original typeface
+  remains unconfirmed. Regenerate the letter masks with `tools/testing/render_title_prompt.py`.
+- In the narrated prologue, **Skip opening story** is remappable and defaults to Start/Enter.
+  It opens the original Skip control and activates it in the same scene.
+- The PC adapter uses verified display states and read-only BKIE menu fields, plus the existing
+  editable-name hook. Unsupported contexts retain the original DS inputs. The original title
+  art returns on the next launch after disabling PC game menus.
+- Changing the selected option plays the original name keyboard's press sample. The port reads the
+  wave from the player's ROM, plays one short pass at the pitch measured in the game and mixes it
+  into the normal output stream. Initial focus, blocked movement and confirmation do not trigger
+  the added cue. Confirm continues to use the game's own action and sound.
+- The conflict dialog identifies existing assignments and requires confirmation before transferring
+  a binding. Other input contexts retain their assignments.
+
+**Verification:** `tests/rom/controller_menus.txt` covers the title, slot 2, keyboard focus,
+name and handedness confirmations, save creation, Adventure and the narrated prologue. This coverage
+does not extend to the whole campaign or alternate keyboard pages. Physical controller validation remains
+open. See [Controller menu replay](../BUILDING.md#controller-menu-replay).
+
+**Asset verification, 2026-11-21.** The English launcher replay confirmed the new title and selected
+palette on both slots. Comparing the decompressed archives for English, French and Spanish showed
+that edits stay in caption tiles. The on-disk ROM is read only. The slot palettes are derived from the
+local SelectM and KeyboardBG resources. `tests/rom/controller_menu_feedback.txt` covered both saves,
+the name keyboard, Yes/No, Start/Copy/Erase, and Adventure/Battle/Tag Mode/Options. **Verified**
+with SDL's dummy audio driver: 11 cues entered the output stream for 11 selection changes, and a
+blocked Down produced none. The 3,000-frame original-input Gage replay still matches the reference.
+Listening on physical speakers remains untested.
+
+**Startup submenus.** Up and Down navigate Options. Left and Right change the selected value;
+Confirm on a value advances it. Mic Test, Cancel and OK use the same focus and confirmation
+bindings. Back exits Mic Test, cancels Options and selects No in confirmation dialogs. Copy and
+Erase start with No selected and use the game's own confirmation and save flow. The Battle lobby,
+Player List and waiting page support menu navigation. The Tag Mode back arrow is also available;
+choosing and moving treasures for exchange still uses touch or mouse.
+
+The extra contexts are tracked by replaying the original touch routes for BKIE rev. 0 and
+comparing display state and read-only RAM. Options and save dialogs reuse palette variants
+from SelectM. Battle lobby buttons use BselM_A and the list arrows use ListM. See
+`tests/rom/startup_options.txt` and `tests/rom/startup_side_menus.txt` for the controller and
+keyboard replays. Multiplayer sessions and physical microphone input are unverified.
+
+**Direct analog movement remains under investigation.** A read-only Forest Sanctuary checkpoint and
+idle/right/left/up replays verified the change and decay of the horizontal movement vector. A local
+write probe traced the vector to overlay 17's frame update at `0x020bc620` in BKIE rev. 0. This is
+downstream of input. The earlier movement request and the states that allow it still need verification
+before binding the analog stick to that request.
 
 ### Planned gameplay profiles
 

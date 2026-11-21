@@ -42,7 +42,9 @@ proven in FFCCEOT-Recomp, themeable with our own art, and controller-navigable; 
 in-game configuration overlay, navigable with a gamepad. Input handling and on-screen prompts consume the same
 action/binding model. Display overrides change symbols without silently remapping physical buttons. See
 [controller-first requirements and flute candidates](CONTROLS_AND_MICROPHONE.md#controller-first-requirements-maintainer-2026-11-20).
-The current app has no Controls settings page; the categories above are a specification, not a list of shipped UI.
+The Windows app now has the shared Controls editor for existing DS/utility bindings and inactive instrument
+bindings, with device-type label overrides. See the implementation/verification subsection in the linked document.
+Remaining categories and complete modern gameplay profiles are still a specification, not shipped features.
 
 ## 3. Enhancements (gameplay options)
 

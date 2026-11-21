@@ -1,6 +1,6 @@
 # PC presentation: next delivery steps
 
-Updated: 2026-11-19. Status: **Proposed delivery sequence, approved direction by the maintainer.**
+Updated: 2026-11-20. Status: **Proposed delivery sequence, approved direction by the maintainer.**
 This implements M4/M5 incrementally; it does not replace M1–M8 or claim campaign-wide coverage.
 The current task is **P1, Gage**. Start with a complete interaction, implement its presentation and input,
 then verify it before extending the same components to other contexts.
@@ -16,8 +16,12 @@ then verify it before extending the same components to other contexts.
 - [ ] Verify context entry/exit and interruptions; exclude solo flute, field, menus and unrelated scenes.
 - [ ] Implement one PC canvas preserving the note guide, partner, instructions and usable flute controls.
 - [ ] Integrate optional remappable button notes for gamepad and keyboard, with controller-first ergonomics.
-- [ ] Add Controls pages and binding-driven prompts: Automatic/Xbox/PlayStation/Nintendo symbols with override;
-      configuration and gameplay share one binding model (2026-11-20 requirements in CONTROLS_AND_MICROPHONE.md).
+- [x] Add shared Controls pages and persistent bindings, contextual conflicts, reset and automatic/manual
+      Xbox/PlayStation/Nintendo labels; existing live input and configuration consume the same model.
+- [x] Add a confirmed conflict-transfer dialog and contextual controller focus for title/file/name menus.
+      Local SDL replay covers file/name creation; physical controller and remaining game menus still need acceptance.
+- [ ] Connect that model to the verified flute context and adapted in-game button prompts. Six instrument
+      bindings are currently configuration only; illustrated glyph assets and button-only Gage acceptance remain open.
 - [ ] Verify inverse pointer mapping, sustained notes, breath, handedness and original-view override.
 - [ ] Replay off/on, review the actual presentation and complete the interaction using the adapted view.
 

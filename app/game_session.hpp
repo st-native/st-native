@@ -3,9 +3,11 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "audio/audio_settings.hpp"
+#include "input/controls.hpp"
 #include "present/screen_enhancements.hpp"
 #include "present/internal_resolution.hpp"
 #include "present/screen_layout.hpp"
@@ -27,6 +29,7 @@ struct GameLaunch {
     bool pause_on_menu = false;
     SecondaryViewSettings secondary;
     int internal_scale = default_internal_scale;
+    input::Controls controls;
 };
 
 struct GameResult {
@@ -46,6 +49,8 @@ struct GameFrameInput {
     uint64_t published_ns = 0;
 };
 
+using SoftwareFrameOverlay = std::function<void(uint32_t* bottom, uint32_t* cinematic, uint64_t frame)>;
+
 struct PresentedFrameInfo {
     bool drew = false;
     bool shared_scene = false;
@@ -61,7 +66,8 @@ public:
     virtual bool bind_worker_graphics() { return false; }
     virtual void unbind_worker_graphics() {}
     virtual bool publish_game_frame(const GameFrameInput& frame) = 0;
-    virtual bool present_published_game(bool touch_captured, PresentedFrameInfo& info, bool render = true) = 0;
+    virtual bool present_published_game(bool touch_captured, PresentedFrameInfo& info, bool render = true,
+                                        const SoftwareFrameOverlay& overlay = {}) = 0;
     // Three 256x192 BGRA planes: original top, original touch, and the optional cinematic view.
     virtual bool update_game_frame(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) = 0;
     virtual bool present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) = 0;
@@ -79,6 +85,11 @@ public:
     virtual void set_pause_on_menu(bool pause) = 0;
     virtual void set_internal_scale(int scale) = 0;
     virtual int internal_scale() const = 0;
+    virtual input::Controls controls_settings() const = 0;
+    virtual void set_controls_settings(const input::Controls& controls) = 0;
+    virtual void observe_input(const SDL_Event& event) = 0;
+    virtual SDL_JoystickID active_gamepad() const = 0;
+    virtual bool save_game_preview(const char*) { return false; }
 };
 
 enum class PauseAction { stay, resume, leave };
@@ -91,6 +102,7 @@ public:
     virtual void input(SDL_Event& event) = 0;
     virtual bool draw() = 0;
     virtual PauseAction action() const = 0;
+    virtual bool capturing_input() const { return false; }
 };
 
 int run_game_cli(int argc, char** argv);
