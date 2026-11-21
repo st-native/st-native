@@ -1,0 +1,41 @@
+Expose side-effect-free reads of DS main RAM at the frame boundary.
+
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -165,6 +165,9 @@
+     // Queries runtime overlay probes from the game thread, for example inside Host::on_frame.
+     virtual bool is_overlay_resident(uint32_t id) = 0;
+ 
++    // Game-thread snapshot of aligned DS main RAM only. No I/O reads or guest cycles.
++    virtual uint32_t read_main_ram_word(uint32_t address) const = 0;
++
+     // Video settings. A change takes effect at the next frame boundary; video() reports what is in use (a GL
+     // renderer that failed to start falls back to Software).
+     virtual void set_video(const VideoSettings& settings) = 0;
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -63,6 +63,7 @@
+     void touch(int x, int y) override;
+     void release_touch() override;
+     bool is_overlay_resident(uint32_t id) override;
++    uint32_t read_main_ram_word(uint32_t address) const override;
+     void set_video(const VideoSettings& settings) override;
+     VideoSettings video() const override { return video_; }
+     void set_audio_interpolation(AudioInterpolation interpolation) override {
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -766,6 +766,14 @@
+     if (id >= overlays_by_id_.size()) return false;
+     const auto* overlay = overlays_by_id_[id];
+     return overlay && overlay->nprobes && overlay_resident(*overlay);
++}
++
++uint32_t RuntimeImpl::read_main_ram_word(uint32_t address) const {
++    if ((address & 3u) || address < 0x02000000u || address >= 0x02400000u) return 0;
++    const auto* page = read_pages_[address >> NTR_PAGE_SHIFT];
++    uint32_t value = 0;
++    if (page) NTR_MEMCPY(&value, page + (address & NTR_PAGE_MASK), sizeof(value));
++    return value;
+ }
+ 
+ const NtrFuncEntry* RuntimeImpl::lookup(u32 target) {

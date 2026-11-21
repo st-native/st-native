@@ -1,0 +1,52 @@
+# SDL controller smoke input. Start with a blank nonpersistent save.
+# Replays title, slot 2, keyboard, name and handedness choices, and Adventure.
+1000 button west 1
+1006 button west 0
+1110 shot title
+1150 button north 1
+1156 button north 0
+1850 shot file_created
+1900 button south 1
+1906 button south 0
+2050 shot slots
+2100 button dpdown 1
+2106 button dpdown 0
+2150 shot slot_two_focus
+2200 button south 1
+2206 button south 0
+2340 shot keyboard
+2380 button dpright 1
+2386 button dpright 0
+2420 button south 1
+2426 button south 0
+2480 shot typed
+2510 button start 1
+2516 button start 0
+2620 shot confirm_name
+2650 button south 1
+2656 button south 0
+2780 shot handedness
+2810 button south 1
+2816 button south 0
+2940 shot confirm_hand
+2970 button south 1
+2976 button south 0
+3350 shot saved
+3440 button south 1
+3446 button south 0
+3590 shot saved_slots
+3620 button dpdown 1
+3626 button dpdown 0
+3670 button south 1
+3676 button south 0
+3820 shot file_actions
+3860 button south 1
+3866 button south 0
+4010 shot mode
+4050 button south 1
+4056 button south 0
+4650 shot prologue
+4780 button start 1
+4786 button start 0
+4920 shot after_skip
+5500 shot after_skip_later

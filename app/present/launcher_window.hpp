@@ -2,10 +2,11 @@
 #pragma once
 
 #include <memory>
+#include <functional>
 
 #include "../game_session.hpp"
 
-namespace Rml { class Context; }
+namespace Rml { class Context; class ElementDocument; }
 
 class LauncherWindow final : public st::GamePresentation {
 public:
@@ -14,7 +15,7 @@ public:
     bool open(const char* title, int width, int height);
     bool process_events(Rml::Context& context, bool* audio_devices_changed = nullptr);
     bool draw(Rml::Context& context, const char* preview_path = nullptr);
-    bool draw_pause(Rml::Context& context);
+    bool draw_pause(Rml::Context& context, const char* preview_path = nullptr);
     void menu_input(Rml::Context& context, SDL_Event& event);
     SDL_Window* window() const override;
     bool update_game_frame(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) override;
@@ -26,12 +27,17 @@ public:
     void toggle_classic_layout() override;
     void set_secondary_view(st::SecondaryViewSettings settings) override;
     void peek_secondary(bool held) override;
-    bool save_game_preview(const char* path);
+    bool save_game_preview(const char* path) override;
     uint64_t audio_revision() const override;
     st::AudioSettings audio_settings() const override;
     void set_audio_settings(const st::AudioSettings& audio) override;
     bool pause_on_menu() const override;
     void set_pause_on_menu(bool pause) override;
+    st::input::Controls controls_settings() const override;
+    void set_controls_settings(const st::input::Controls& controls) override;
+    void observe_input(const SDL_Event& event) override;
+    SDL_JoystickID active_gamepad() const override;
+    void set_input_filter(std::function<bool(const SDL_Event&)> filter);
 
 private:
     bool draw_game();

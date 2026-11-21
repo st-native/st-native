@@ -100,6 +100,15 @@ Use frames rendered by the runtime from the player's ROM and draw the launcher c
 
 ## M5 — Graphics and quality of life
 
+**M4 controls foundation, 2026-11-20:** the Windows launcher and in-game overlay now share a persistent
+keyboard/mouse and gamepad binding editor. Existing live DS/utility actions use the same model; label overrides,
+conflicts, reset, dead zone, trigger thresholds and controller menu navigation are implemented. Six instrument
+bindings remain inactive pending the flute context/adapter and button-only Gage acceptance. This does not
+complete modern movement/combat or the controller-only campaign gate. A confirmed conflict-transfer popup and
+an optional controller focus now cover verified title/file/name menus; an SDL input session created a named
+file without mouse input. Start remains the game's Start, and L3 is the configurable settings shortcut.
+See [control implementation](design/CONTROLS_AND_MICROPHONE.md#implemented-foundation-2026-11-20-windows-execution-verified).
+
 **Single-screen PC default gate (2026-11-18):** [SINGLE_SCREEN_COVERAGE.md](design/SINGLE_SCREEN_COVERAGE.md)
 is the current per-context register. Required information must be available automatically: an M peek or a manual
 return to both DS views does not complete a boss, duet or train adaptation. Unknown contexts keep both views in

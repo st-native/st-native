@@ -16,6 +16,42 @@ Keep them to yourself: never commit, upload or share them.
 
 ## 1. What you need
 
+### Controls foundation (Windows developer build, 2026-11-20)
+
+Open `st_launcher.exe`, select **Controls**, then **Keyboard & mouse** or **Controller**. Select **General** for
+the existing live DS/utility actions or **Flute** for instrument bindings saved for the upcoming adapter.
+Choose Primary/Alternate and press an input; Esc or the configured settings-menu button cancels capture, Delete clears it. A conflict
+opens a modal showing the existing action; Cancel preserves it and Replace transfers the assignment. A focused binding can
+also be cleared with the controller's north face button. Reset restores the selected device's defaults.
+Automatic/Xbox/PlayStation/Nintendo label styles change display only. Unknown devices show neutral face positions.
+The same editor is available in the Esc/F1 overlay; **L3** opens it on controller by default and is remappable.
+**Start/Menu/Options/Plus sends DS Start**, and Back/View/Share/Create/Minus sends DS Select.
+Existing configurations using the former default migrate automatically without replacing custom L3 bindings.
+These remain original DS shortcuts. **PC game menus** adds direct controller focus in verified file/name menus;
+choose **Game menus** in Actions to remap select, back, erase and clear. South selects, west erases, north clears,
+east cancels name entry, and Start accepts the name. D-pad or left stick changes focus. The remappable
+**Skip opening story** defaults to Start/Enter during the narrated prologue. Unknown gameplay contexts retain
+original DS input. The selected option uses a variant of the original palette. Moving selection plays the name keyboard cue
+from your ROM. Turning PC game menus off restores original input. The title art updates on the next launch.
+
+The instrument group does not yet play notes: it needs the verified flute context/input adapter. For current
+scope and test evidence, see [controls](design/CONTROLS_AND_MICROPHONE.md#implemented-foundation-2026-11-20-windows-execution-verified).
+ROM-free checks: `tools\build\build_program.cmd --tests`, then
+`st_launcher.exe --smoke-test <existing-build-output-directory>` and
+`python -I tests/check_screen_composition.py <that-directory>`. Keep outputs below ignored `build/`.
+
+#### Controller menu replay
+
+`tests/rom/controller_menus.txt` injects SDL controller events through live input, not already-translated guest
+touches. Use only the explicit developer `--game-smoke <own-rom>` path, with `ST_NATIVE_SMOKE_MODULE` pointing to
+your local module, `ST_NATIVE_SMOKE_LAYOUT=single`, `ST_NATIVE_SMOKE_FRAMES=5600`, and
+`ST_NATIVE_SMOKE_CONTROLLER` pointing to that file. The smoke uses a blank, non-persistent save unless a read-only
+checkpoint is explicitly selected. Optional outputs: `ST_NATIVE_SMOKE_CONTROLLER_SHOTS` (existing ignored directory),
+`ST_NATIVE_SMOKE_INPUT_PROFILE`, `ST_NATIVE_SMOKE_RECORD`, `ST_NATIVE_SMOKE_HASHES` and
+`ST_NATIVE_SMOKE_FRAME_PROFILE` (file paths below `build/`). These variables are ignored in ordinary play.
+Button/axis timestamps use guest frames. Focus repeat uses host time, so this live smoke tolerates timing
+variation and is not itself a deterministic hash reference. Use guest-input replays for deterministic regression.
+
 | | Validated with |
 |---|---|
 | Your dump of *Spirit Tracks*, USA/Australia, revision 0 (game code `BKIE`) | SHA-1 `1f0921b5e99db9d92d24710f1b004e4f3c997b73`, 134,217,728 bytes. Other dumps are refused (only this release has addresses so far) |
@@ -95,8 +131,8 @@ the full top screen beside it. Portrait windows use the stacked arrangement in t
 both screens without a gap, **Side by side** gives both screens the same size, and **PiP overlay** places
 the top screen in the upper-right corner. The mouse starts touches only on the DS touch screen.
 
-The launcher groups these options into **Screens**, **Screen features**, **Audio**, **Window** and **Game**. **Esc** and **F1** open the in-game overlay menu
-with **Screens**, **Screen features**, **Audio** and **Window** tabs without pausing the game by default, so layout and audio changes can be previewed live;
+The launcher groups these options into **Screens**, **Map**, **Screen features**, **Controls**, **Audio**, **Window** and **Game**. **Esc** and **F1** open the in-game overlay menu
+with the same categories except **Game**, without pausing by default, so settings can be previewed live;
 use the **Pause game: Off / On** button in the menu header (or **Game → Pause on Esc / F1** in the launcher) to make **Esc** / **F1** pause gameplay and audio instead.
 **Audio** configures master volume (`0–100%`), muting while unfocused,
 SPU audio quality (`Original DS`, `Linear`, `Cosine`, `Cubic`, `Gaussian`), the playback output device, the microphone mode
@@ -118,7 +154,7 @@ with `st_launcher.exe --smoke-test`, without a ROM. Pass an existing output dire
 previews of the empty launcher in desktop and narrow layouts, plus synthetic screen-composition fixtures.
 Run `python -I tests/check_screen_composition.py <that output directory>` to check real GL blending at 50/75/100%,
 atlas selection, orientation and 4:3 letterboxing. These captures contain only our generated colors, no ROM data.
-The `Map` tab controls the optional overlay for `Screens → Single screen`; hold M for a display-only upper-screen
+The `Map` tab controls the optional overlay for `Screens → Single screen`; hold the configured peek binding (M by default) for a display-only upper-screen
 peek, and use F2 for the original arrangement. Existing preferences are preserved.
 To exercise preparation and cache reuse directly, run
 `.venv\Scripts\python -I platform\windows\launcher.py --rom "C:\path\to\your\Spirit Tracks.nds" --prepare-only`.

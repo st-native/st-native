@@ -6,6 +6,7 @@
 #include <string>
 
 #include "audio/audio_settings.hpp"
+#include "input/controls.hpp"
 #include "present/screen_enhancements.hpp"
 #include "present/screen_layout.hpp"
 
@@ -25,6 +26,7 @@ struct GameLaunch {
     AudioSettings audio;
     bool pause_on_menu = false;
     SecondaryViewSettings secondary;
+    input::Controls controls;
 };
 
 struct GameResult {
@@ -51,6 +53,11 @@ public:
     virtual void set_audio_settings(const AudioSettings& audio) = 0;
     virtual bool pause_on_menu() const = 0;
     virtual void set_pause_on_menu(bool pause) = 0;
+    virtual input::Controls controls_settings() const = 0;
+    virtual void set_controls_settings(const input::Controls& controls) = 0;
+    virtual void observe_input(const SDL_Event& event) = 0;
+    virtual SDL_JoystickID active_gamepad() const = 0;
+    virtual bool save_game_preview(const char*) { return false; }
 };
 
 enum class PauseAction { stay, resume, leave };
@@ -63,6 +70,7 @@ public:
     virtual void input(SDL_Event& event) = 0;
     virtual bool draw() = 0;
     virtual PauseAction action() const = 0;
+    virtual bool capturing_input() const { return false; }
 };
 
 int run_game_cli(int argc, char** argv);
