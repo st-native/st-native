@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "../app/present/subtitle_composition.hpp"
+#include "../game/st/hooks/skip_prompt.hpp"
 
 #include <climits>
 #include <vector>
@@ -36,5 +37,18 @@ int main() {
         st::compose_subtitles(output.data(), nullptr, text.data()) ||
         st::compose_subtitles(text.data(), art.data(), text.data()) ||
         st::compose_subtitles(output.data(), art.data(), text.data(), {0, 96})) return 8;
+    if (st::native_skip_visible(art.data())) return 9;
+    auto prompt = art;
+    st::draw_skip_prompt(prompt.data(),"Enter",1,false);
+    if (prompt[6 * 256 + 250] == background || prompt[16 * 256 + 230] != background) return 10;
+    art[8 * 256 + 168] = art[14 * 256 + 175] = 0xff000000u;
+    art[3 * 256 + 238] = art[3 * 256 + 246] = art[8 * 256 + 243] = art[8 * 256 + 251] = 0xfffbfbfbu;
+    if (!st::native_skip_visible(art.data())) return 11;
+    prompt = art;
+    st::draw_skip_prompt(prompt.data(),"Menu",2,true);
+    if (prompt[6 * 256 + 154] == background) return 12;
+    for (int y = 0; y < 192; ++y)
+        for (int x = 0; x < 256; ++x)
+            if ((x >= 162 || y < 3 || y > 15) && prompt[y * 256 + x] != art[y * 256 + x]) return 13;
     return 0;
 }

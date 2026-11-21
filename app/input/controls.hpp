@@ -159,6 +159,19 @@ struct Controls {
     }
 };
 
+inline Binding prompt_binding(const Controls& controls, Action action, bool using_gamepad, bool gamepad_available) {
+    const auto& bindings = controls.bindings[size_t(action)];
+    const auto first = [&](size_t slot) {
+        return bindings[slot].kind != Kind::none ? bindings[slot] : bindings[slot + 1];
+    };
+    if (using_gamepad) {
+        const auto binding = first(2);
+        if (binding.kind != Kind::none) return binding;
+    }
+    const auto binding = first(0);
+    return binding.kind != Kind::none || !gamepad_available ? binding : first(2);
+}
+
 // Held state is resolved from all bindings, so releasing an alternate or another device
 // cannot cancel a still-held primary binding. Reset on context/focus/device/menu changes.
 class State {
@@ -271,5 +284,13 @@ inline std::string label(Binding b, Symbols style = Symbols::automatic, SDL_Game
     case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return "D-pad right";
     default: return "Button " + std::to_string(b.code);
     }
+}
+
+inline std::string prompt_label(Binding b, Symbols style, SDL_GamepadType detected) {
+    if (b == key(SDL_SCANCODE_RETURN)) return "Enter";
+    if (b == key(SDL_SCANCODE_KP_ENTER)) return "Num Enter";
+    if (b == button(SDL_GAMEPAD_BUTTON_START) && symbol_type(style,detected) == SDL_GAMEPAD_TYPE_UNKNOWN)
+        return "Start";
+    return label(b,style,detected);
 }
 } // namespace st::input

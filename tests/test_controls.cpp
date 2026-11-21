@@ -101,6 +101,19 @@ int main() {
     require(label(south,Symbols::automatic,SDL_GAMEPAD_TYPE_PS5)=="Cross");
     require(label(south,Symbols::automatic,SDL_GAMEPAD_TYPE_UNKNOWN)=="South");
     const auto before=settings.bindings; settings.symbols=Symbols::nintendo; require(settings.bindings==before);
+    auto prompts = settings;
+    const auto skip = Action::skip_cutscene;
+    require(prompt_binding(prompts,skip,false,true)==key(SDL_SCANCODE_RETURN));
+    require(prompt_binding(prompts,skip,true,true)==button(SDL_GAMEPAD_BUTTON_START));
+    require(prompt_label(key(SDL_SCANCODE_RETURN),Symbols::automatic,SDL_GAMEPAD_TYPE_UNKNOWN)=="Enter");
+    require(prompt_label(button(SDL_GAMEPAD_BUTTON_START),Symbols::nintendo,SDL_GAMEPAD_TYPE_UNKNOWN)=="+");
+    require(prompt_label(west,Symbols::xbox,SDL_GAMEPAD_TYPE_UNKNOWN)=="X");
+    require(prompts.assign(skip,2,{}));
+    require(prompts.assign(skip,3,west));
+    require(prompt_binding(prompts,skip,true,true)==west);
+    require(prompts.assign(skip,0,{}));
+    require(prompt_binding(prompts,skip,false,true)==west);
+    require(prompt_binding(prompts,skip,false,false).kind==Kind::none);
 
     require(st::file_menu(2,0,false)==st::GameMenu::slots);
     require(st::file_menu(21,6,false)==st::GameMenu::confirm_name);

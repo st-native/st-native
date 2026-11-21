@@ -100,6 +100,7 @@
 #include "menu_art.hpp"
 #include "menu_cue.hpp"
 #include "screen_context.hpp"
+#include "skip_prompt.hpp"
 #include "st_hooks.hpp"
 #include "st_probe.hpp"
 #include "utf8_path.hpp"
@@ -542,8 +543,12 @@ public:
         pressed |= sh_.pressed.exchange(0);
         if (game_menu != st::GameMenu::prologue || sh_.cancel_menu_touch.load()) prologue_skip_ = 0;
         if (sh_.skip_prologue.exchange(false) && game_menu == st::GameMenu::prologue) {
-            prologue_skip_ = 16;
-            pressed |= st::input::bit(st::input::Action::start);
+            if (f.bottom && st::native_skip_visible(f.bottom)) {
+                prologue_skip_ = 6;
+            } else {
+                prologue_skip_ = 16;
+                pressed |= st::input::bit(st::input::Action::start);
+            }
         }
         if (prologue_skip_ > 10) held |= st::input::bit(st::input::Action::start);
         rt_->set_buttons(held, pressed);
@@ -1119,6 +1124,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         if (!presentation) cli_gamepads = std::make_unique<st::input::Gamepads>();
         auto active_pad = [&] { return presentation ? presentation->active_gamepad() : cli_gamepads->active(); };
         auto pad_id = active_pad();
+        bool using_gamepad = pad_id != 0;
         uint32_t previous_actions = 0;
         bool window_focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
         bool editing_name = false;
@@ -1258,6 +1264,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     if (presentation) presentation->observe_input(e); else cli_gamepads->event(e);
                     if (active_pad() != pad_id || e.type == SDL_EVENT_GAMEPAD_REMOVED || e.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
                         pad_id = active_pad(); input.clear(); previous_actions = 0;
+                        if (!pad_id) using_gamepad = false;
                         mouse_down = false; sh.held = sh.pressed = 0; sh.touching = sh.blowing = sh.fast = false;
                         if (presentation) presentation->peek_secondary(false);
                     }
@@ -1337,6 +1344,11 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     if ((e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || e.type == SDL_EVENT_GAMEPAD_BUTTON_UP) &&
                         e.gbutton.which != pad_id) continue;
                     if (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && e.gaxis.which != pad_id) continue;
+                    if (e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                        (e.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && std::abs(int(e.gaxis.value)) > 16000))
+                        using_gamepad = true;
+                    else if (e.type == SDL_EVENT_KEY_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+                        using_gamepad = false;
                     input.event(e);
                     using A = st::input::Action;
                     const auto actions = input.actions();
@@ -1494,6 +1506,19 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     if (const auto* item = menu_focus.visible_item()) {
                         menu_art.draw(frame.data()+kW*kH,game_menu,menu_focus.index(),*item);
                         if (cinematic) menu_art.draw(frame.data()+2*kW*kH,game_menu,menu_focus.index(),*item);
+                    }
+                    if (game_menu == st::GameMenu::prologue) {
+                        using namespace st::input;
+                        const auto binding = prompt_binding(input.settings,Action::skip_cutscene,using_gamepad,pad_id != 0);
+                        if (binding.kind != Kind::none) {
+                            auto* pad = pad_id ? SDL_GetGamepadFromID(pad_id) : nullptr;
+                            const auto type = pad ? SDL_GetGamepadType(pad) : SDL_GAMEPAD_TYPE_UNKNOWN;
+                            const auto caption = prompt_label(binding,input.settings.symbols,type);
+                            auto* touch = frame.data()+kW*kH;
+                            const bool native_skip = st::native_skip_visible(touch);
+                            st::draw_skip_prompt(touch,caption,o.language,native_skip);
+                            if (cinematic) st::draw_skip_prompt(frame.data()+2*kW*kH,caption,o.language,native_skip);
+                        }
                     }
                 }
                 if (!presentation->present_game(frame.data(), shared_scene, mouse_down, cinematic)) view_error = sh.quit = true;
