@@ -50,13 +50,15 @@ int main() {
     if (!st::native_skip_visible(revealed.data())) return 10;
     for (const auto label : {"Menu", "Keypad Memory Subtract", ""}) {
         for (const auto language : {1u,2u,5u}) {
-            auto before = art, after = revealed;
-            const int left = st::draw_skip_prompt(before.data(),label,language);
-            if (st::draw_skip_prompt(after.data(),label,language) != left || before != after ||
-                st::native_skip_visible(after.data())) return 11;
+            auto after = revealed;
+            const int left = st::draw_skip_prompt(after.data(),label,language);
+            if (left < 0 || !st::native_skip_visible(after.data()) ||
+                (after == revealed) != (label[0] == '\0')) return 11;
+            const int native_label = language == 2 ? 190 : language == 5 ? 196 : 205;
             for (int y = 0; y < 192; ++y)
                 for (int x = 0; x < 256; ++x)
-                    if ((x < left || y >= st::skip_prompt_height) && after[y * 256 + x] != art[y * 256 + x]) return 12;
+                    if ((x < left || x >= native_label || y >= st::skip_prompt_height) &&
+                        after[y * 256 + x] != revealed[y * 256 + x]) return 12;
         }
     }
     return 0;

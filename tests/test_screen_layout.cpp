@@ -10,6 +10,9 @@ static_assert(st::effective_screen_layout(ScreenLayout::picture_in_picture, true
 static_assert(st::effective_screen_layout(ScreenLayout::focus, false, true, false) == ScreenLayout::focus);
 static_assert(st::effective_screen_layout(ScreenLayout::focus, false, false, true) == ScreenLayout::classic);
 static_assert(st::effective_screen_layout(ScreenLayout::side_by_side, true, false, false) == ScreenLayout::side_by_side);
+static_assert(st::effective_screen_layout(ScreenLayout::single, true, true, false, true) == ScreenLayout::single);
+static_assert(st::effective_screen_layout(ScreenLayout::single, true, true, true, true) == ScreenLayout::classic);
+static_assert(st::effective_screen_layout(ScreenLayout::side_by_side, false, true, false, true) == ScreenLayout::side_by_side);
 
 int main() {
     constexpr std::array sizes{st::ScreenSize{390, 780}, st::ScreenSize{390, 300},

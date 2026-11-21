@@ -144,6 +144,7 @@ bool save_preview(int width, int height, const char* path) {
 struct FrameSlot {
     bool is_gl = false;
     bool shared_scene = false;
+    bool touch_only = false;
     bool cinematic = false;
     bool cinematic_is_cpu = false;
     int scale = 1;
@@ -202,7 +203,7 @@ struct LauncherWindow::State {
 
     st::ScreenLayout layout = st::ScreenLayout::focus;
     std::atomic<int> internal_scale{st::default_internal_scale};
-    bool automatic_join = true, shared_scene = false, classic_override = false, cinematic = false;
+    bool automatic_join = true, shared_scene = false, touch_only = false, classic_override = false, cinematic = false;
     st::ScreenEnhancements enhancements;
     st::SecondaryViewSettings secondary;
     bool secondary_peek = false;
@@ -219,8 +220,16 @@ struct LauncherWindow::State {
     }
 
     st::ScreenViews views(int width, int height) const {
-        return st::screen_views(st::effective_screen_layout(layout, automatic_join, shared_scene, classic_override),
-                                width, height, secondary, secondary_peek);
+        const auto effective = st::effective_screen_layout(layout, automatic_join, shared_scene, classic_override, touch_only);
+        const auto map = automatic_join && shared_scene && touch_only ? st::SecondaryViewSettings{} : secondary;
+        return st::screen_views(effective, width, height, map, secondary_peek);
+    }
+
+    void update_scene(bool shared, bool touch_menu, bool touch_captured) {
+        if (touch_captured || (shared_scene == shared && touch_only == touch_menu)) return;
+        shared_scene = shared;
+        touch_only = touch_menu;
+        if (automatic_join) classic_override = false;
     }
 
     bool ensure_present_pipeline() {
@@ -483,6 +492,7 @@ bool LauncherWindow::publish_game_frame(const st::GameFrameInput& input) {
     }
 
     slot.shared_scene = input.shared_scene;
+    slot.touch_only = input.touch_only;
     slot.menu = input.menu;
     slot.frame_number = input.frame_number;
     slot.published_ns = input.published_ns;
@@ -512,10 +522,7 @@ bool LauncherWindow::present_published_game(bool touch_captured, st::PresentedFr
         glDeleteSync(slot.fence);
         slot.fence = nullptr;
     }
-    if (!touch_captured && state_->shared_scene != slot.shared_scene) {
-        state_->shared_scene = slot.shared_scene;
-        if (state_->automatic_join) state_->classic_override = false;
-    }
+    state_->update_scene(slot.shared_scene, slot.touch_only, touch_captured);
     state_->cinematic = slot.cinematic;
 
     if (slot.is_gl) {
@@ -604,10 +611,7 @@ bool LauncherWindow::draw(Rml::Context& context, const char* preview_path) {
 bool LauncherWindow::update_game_frame(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) {
     if (SDL_GL_GetCurrentContext() != state_->gl && !SDL_GL_MakeCurrent(window(), state_->gl)) return false;
     if (!state_->ensure_present_pipeline()) return false;
-    if (!touch_captured && state_->shared_scene != shared_scene) {
-        state_->shared_scene = shared_scene;
-        if (state_->automatic_join) state_->classic_override = false;
-    }
+    state_->update_scene(shared_scene, false, touch_captured);
     state_->cinematic = cinematic;
     const size_t plane = size_t(kDsWidth) * size_t(kDsHeight);
     state_->upload_soft_planes(pixels, pixels + plane, cinematic ? pixels + 2 * plane : nullptr);

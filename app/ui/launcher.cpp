@@ -1139,6 +1139,23 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         if (window.game_coordinates(peek_x, peek_y, false)) return 18;
         window.peek_secondary(false);
         window.set_secondary_view({});
+        // The save menu may arrive without a cinematic texture during a renderer change.
+        // Its touch view must still fill Single screen, with an explicit Classic override.
+        st::PresentedFrameInfo menu_frame;
+        if (!window.publish_game_frame({.top = tiles.data(),
+                                       .bottom = tiles.data() + st::ds_width * st::ds_screen_height,
+                                       .shared_scene = true, .touch_only = true}) ||
+            !window.present_published_game(false, menu_frame) || !menu_frame.drew || menu_frame.cinematic) return 18;
+        int menu_w = 0, menu_h = 0;
+        SDL_GetWindowSize(window.window(), &menu_w, &menu_h);
+        const auto single_menu = st::cinematic_view(menu_w, menu_h);
+        const float menu_x = single_menu.x + single_menu.width / 2.f;
+        const float menu_y = single_menu.y + single_menu.height / 8.f;
+        float point_x = menu_x, point_y = menu_y;
+        if (!window.game_coordinates(point_x, point_y, false)) return 18;
+        window.toggle_classic_layout();
+        point_x = menu_x; point_y = menu_y;
+        if (window.game_coordinates(point_x, point_y, false)) return 18;
         if (!window.present_game(tiles.data(), false, false, false)) return 18;
         if (!previews.empty() && !window.save_game_preview(path_to_utf8(previews / "single-hidden.bmp").c_str())) return 18;
         pause.open();

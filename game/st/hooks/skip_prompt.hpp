@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string_view>
@@ -56,35 +55,38 @@ inline void text(uint32_t* pixels, int x, std::string_view value, uint32_t ink) 
     }
 }
 
-inline void panel(uint32_t* pixels, int x, int width, uint32_t border, uint32_t fill) {
-    for (int y = 3; y < 16; ++y)
+inline void panel(uint32_t* pixels, int x, int width) {
+    for (int y = 2; y < 16; ++y)
         for (int col = 0; col < width; ++col) {
-            const bool cap = y == 3 || y == 15;
+            const bool cap = y == 2 || y == 15;
             const bool side = col == 0 || col == width - 1;
-            if (!cap || !side) pixels[y * 256 + x + col] = cap || side ? border : fill;
+            if (!cap || !side) pixels[y * 256 + x + col] = 0xff000000u;
         }
 }
 
 } // namespace skip_art
 
-inline constexpr int skip_prompt_default_left = 164;
+inline constexpr int skip_prompt_default_left = 165;
 inline constexpr int skip_prompt_height = 18;
 
 inline int draw_skip_prompt(uint32_t* pixels, std::string_view binding, unsigned language) {
     binding = binding.substr(0,22);
-    const std::string_view action = language == 2 ? "Passer" : language == 5 ? "Saltar" : "Skip";
-    const int key_width = binding.empty() ? 0 : int(binding.size()) * 6 + 7;
-    const int action_x = 250 - int(action.size()) * 6;
-    const int key_x = action_x - 5 - key_width;
-    const int left = std::min(skip_prompt_default_left,key_x - 4);
-    // Cover the original widget's full footprint, including its edges during the fade.
-    for (int y = 0; y < skip_prompt_height; ++y)
-        std::fill_n(pixels + y * 256 + left,256-left,y == skip_prompt_height - 1 ? 0xff2b3430u : 0xff101715u);
-    if (key_width) {
-        skip_art::panel(pixels,key_x,key_width,0xff989789u,0xff232725u);
-        skip_art::text(pixels,key_x+4,binding,0xfffaf6e5u);
+    if (binding.empty()) return skip_prompt_default_left;
+    // The localized original labels start at these columns in the unpressed
+    // frame. Keep its edge, lettering and chevrons, including the press animation.
+    const int native_label = language == 2 ? 190 : language == 5 ? 196 : 205;
+    const int text_width = int(binding.size()) * 6 - 1;
+    const auto ink = 0xff000000u | (pixels[8 * 256 + 243] & 0xffffffu);
+    constexpr int inset = 170;
+    if (inset + text_width + 4 <= native_label) {
+        skip_art::text(pixels,inset,binding,ink);
+        return skip_prompt_default_left;
     }
-    skip_art::text(pixels,action_x,action,0xffe9e8dfu);
+    // A long remapping gets a matching black tag immediately before the button.
+    const int tag_width = text_width + 8;
+    const int left = skip_prompt_default_left - 2 - tag_width;
+    skip_art::panel(pixels,left,tag_width);
+    skip_art::text(pixels,left+4,binding,ink);
     return left;
 }
 

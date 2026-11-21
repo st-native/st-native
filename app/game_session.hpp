@@ -50,6 +50,7 @@ struct GameFrameInput {
     uint64_t frame_number = 0;
     uint64_t published_ns = 0;
     GameMenu menu{};
+    bool touch_only = false;
 };
 
 using SoftwareFrameOverlay = std::function<void(uint32_t* bottom, uint32_t* cinematic, GameMenu menu)>;

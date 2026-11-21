@@ -19,7 +19,9 @@ struct SecondaryViewSettings {
 constexpr bool valid_secondary_size(int value) { return value == 0 || value == 20 || value == 30; }
 constexpr bool valid_secondary_opacity(int value) { return value == 50 || value == 75 || value == 100; }
 
-constexpr ScreenLayout effective_screen_layout(ScreenLayout selected, bool automatic, bool shared_scene, bool invert) {
+constexpr ScreenLayout effective_screen_layout(ScreenLayout selected, bool automatic, bool shared_scene, bool invert,
+                                               bool touch_only = false) {
+    if (automatic && shared_scene && touch_only) return invert ? ScreenLayout::classic : ScreenLayout::single;
     return ((automatic && shared_scene) != invert) ? ScreenLayout::classic : selected;
 }
 

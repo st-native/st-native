@@ -482,7 +482,7 @@ public:
                 const uint64_t published_ns = SDL_GetTicksNS();
                 const bool wake = presentation_->publish_game_frame({
                     f.top, f.bottom, cinematic, f.gl_texture, cinematic_gl,
-                    std::max(1, f.scale), shared_scene, frame_, published_ns, game_menu,
+                    std::max(1, f.scale), shared_scene, frame_, published_ns, game_menu, screen_context_.touch_only(),
                 });
                 sh_.published_game_frame = frame_;
                 if (wake && sh_.frame_event) {

@@ -284,3 +284,7 @@ culling are verified; the default is 4:3.
 offer the same internal resolutions, from **256x192 (Native)** through **3072x2304** per DS
 screen. In the pause menu, the new resolution takes effect when the game resumes. Window size
 and screen placement are controlled separately under **Window** and **Screens**.
+
+The verified file menus have a decorative upper screen. When automatic hiding is enabled, the
+touch screen fills the view even if a renderer change leaves the frame without a composed
+texture. F2 still toggles the stacked DS view in those menus.
