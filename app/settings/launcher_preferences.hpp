@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "../present/internal_resolution.hpp"
+
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -43,6 +45,7 @@ struct LauncherPreferences {
     ScreenEnhancements enhancements;
     SecondaryViewSettings secondary;
     AudioSettings audio;
+    int internal_scale = default_internal_scale;
     input::Controls controls;
 
     explicit LauncherPreferences(const std::filesystem::path& path) {
@@ -59,7 +62,10 @@ struct LauncherPreferences {
             std::istringstream entry(line);
             std::string version;
             if (!(entry >> version)) continue;
-            if (version == "screen-enhancements-v1") {
+            if (version == "internal-resolution-v1") {
+                std::string value;
+                if (entry >> value) internal_scale = parse_internal_scale(value);
+            } else if (version == "screen-enhancements-v1") {
                 int cutscenes = 0, subtitles = 0, hide = 0;
                 if (entry >> cutscenes >> subtitles >> hide &&
                     (cutscenes == 0 || cutscenes == 1) && (subtitles == 0 || subtitles == 1) && (hide == 0 || hide == 1))
@@ -79,6 +85,8 @@ struct LauncherPreferences {
                     audio = {volume, mute != 0, parse_audio_interpolation(interp_key), std::move(out_dev),
                              parse_mic_mode(mic_key), std::move(in_dev), mic_gain};
                 }
+            } else if (version == internal_resolution_value(parse_internal_scale(version))) {
+                internal_scale = parse_internal_scale(version);
             } else if (version == "menu-v1") {
                 int pause = 0;
                 if (entry >> pause && (pause == 0 || pause == 1)) pause_on_menu = pause != 0;
@@ -150,6 +158,7 @@ struct LauncherPreferences {
              << "menu-v1 " << pause_on_menu << '\n';
         file << "secondary-view-v1 " << (valid_secondary_size(secondary.size) ? secondary.size : 0) << ' '
              << (valid_secondary_opacity(secondary.opacity) ? secondary.opacity : 75) << '\n';
+        file << "internal-resolution-v1 " << internal_resolution_value(internal_scale) << '\n';
         const auto input = controls.validate() ? controls : st::input::Controls{};
         file << "controls-v3 " << int(input.symbols) << ' ' << input.deadzone << ' ' << input.trigger_threshold << ' ' << input.game_menus << '\n';
         for (size_t a = 0; a < st::input::action_count; ++a)

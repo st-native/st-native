@@ -90,9 +90,10 @@ h2 { font-size: 23dp; line-height: 28dp; }
 label { margin-right: 9dp; color: #d4ded4; font-size: 16dp; }
 select {
     box-sizing: border-box;
-    flex: 0 0 130dp;
+    flex: 0 0 148dp;
     height: 36dp;
     padding: 0 8dp;
+    font-size: 16dp;
     background-color: #24312e;
     border: 1dp #52645a;
     border-radius: 4dp;

@@ -1,0 +1,455 @@
+Render the cinematic camera at internal OpenGL scale and sync captures on resize.
+
+Adds GlCinematic so OpenGL/Compute upscaling renders the recentered 3D world,
+screen-space 3D UI, and non-bitmap 2D foreground overlays at (256 * scale) x
+(192 * scale) instead of falling back to 1x software without 2D overlays.
+Also recreates the GL renderer when scale changes so VRAM captures are synced
+and 3D/2D caches redraw immediately even on a repeated 3D frame.
+
+diff --git a/runtime/include/ntr/runtime.hpp b/runtime/include/ntr/runtime.hpp
+index 9317dfd..c8b0c52 100644
+--- a/runtime/include/ntr/runtime.hpp
++++ b/runtime/include/ntr/runtime.hpp
+@@ -173,6 +173,14 @@ public:
+     // valid until the next call, or null when the recorded scene cannot be reframed. `ui` places only its
+     // screen-space 3D overlay; the camera and original screens are not affected by that placement.
+     virtual const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}, CinematicCamera camera = {}) = 0;
++
++    // OpenGL/Compute counterpart of render_cinematic(): returns a GL_TEXTURE_2D at (256 * scale) x (192 * scale)
++    // valid until the next call, or 0 when the Software renderer is active or the scene cannot be reframed.
++    virtual unsigned render_cinematic_gl(double aspect, CinematicUiPlacement ui = {}, CinematicCamera = {}) {
++        (void)aspect;
++        (void)ui;
++        return 0;
++    }
+     // Game-thread-only read-only hardware/projection diagnostics; never returns pixels or commands.
+     virtual GraphicsContext inspect_graphics(bool include_projection = true) const = 0;
+ };
+diff --git a/runtime/src/gl_between.cpp b/runtime/src/gl_between.cpp
+index 9bb408c..ec14ccb 100644
+--- a/runtime/src/gl_between.cpp
++++ b/runtime/src/gl_between.cpp
+@@ -1,10 +1,14 @@
+ #include "gl_between.hpp"
+ 
++#include <algorithm>
+ #include <memory>
+ 
+ #include "GPU.h"
+ #include "GPU2D_OpenGL.h"
+ #include "GPU_OpenGL.h"
++#include "NDS.h"
++#include "OpenGLSupport.h"
++#include "gx_stream.hpp"
+ 
+ namespace ntr {
+ 
+@@ -34,6 +38,10 @@ struct Engine2DA {
+     using type = std::unique_ptr<melonDS::Renderer2D> melonDS::Renderer::*;
+     friend type get(Engine2DA);
+ };
++struct Engine2DB {
++    using type = std::unique_ptr<melonDS::Renderer2D> melonDS::Renderer::*;
++    friend type get(Engine2DB);
++};
+ struct FinalPass {
+     using type = void (melonDS::GLRenderer::*)(int, int);
+     friend type get(FinalPass);
+@@ -42,13 +50,81 @@ struct Composite2D {
+     using type = void (melonDS::GLRenderer2D::*)(int, int);
+     friend type get(Composite2D);
+ };
++struct OutputFB2D {
++    using type = GLuint melonDS::GLRenderer2D::*;
++    friend type get(OutputFB2D);
++};
++struct CompositorProg {
++    using type = GLuint melonDS::GLRenderer2D::*;
++    friend type get(CompositorProg);
++};
+ 
+ template struct Grant<Output3D, &melonDS::GLRenderer::OutputTex3D>;
+ template struct Grant<OutputFBs, &melonDS::GLRenderer::FPOutputFB>;
+ template struct Grant<BackBuffer, &melonDS::Renderer::BackBuffer>;
+ template struct Grant<Engine2DA, &melonDS::Renderer::Rend2D_A>;
++template struct Grant<Engine2DB, &melonDS::Renderer::Rend2D_B>;
+ template struct Grant<FinalPass, &melonDS::GLRenderer::RenderScreen>;
+ template struct Grant<Composite2D, &melonDS::GLRenderer2D::RenderScreen>;
++template struct Grant<OutputFB2D, &melonDS::GLRenderer2D::OutputFB>;
++template struct Grant<CompositorProg, &melonDS::GLRenderer2D::CompositorShader>;
++
++const char* kCinematicVS = R"(#version 140
++in vec2 vPos;
++out vec2 fUv;
++void main() {
++    gl_Position = vec4(vPos * 2.0 - 1.0, 0.0, 1.0);
++    fUv = vPos;
++}
++)";
++
++const char* kCinematicFS = R"(#version 140
++uniform sampler2D uTex;
++uniform int uMode;
++uniform int uBrightMode;
++uniform int uBrightFactor;
++in vec2 fUv;
++out vec4 oColor;
++
++ivec3 apply_brightness(ivec3 c) {
++    if (uBrightMode == 1) c += ((63 - c) * uBrightFactor) >> 4;
++    else if (uBrightMode == 2) c -= (c * uBrightFactor) >> 4;
++    return (c << 2) | (c >> 4);
++}
++
++void main() {
++    if (uMode == 3) {
++        vec4 ov = texture(uTex, fUv);
++        if (ov.a < 0.5) discard;
++        oColor = vec4(ov.rgb, 1.0);
++        return;
++    }
++    ivec4 raw = ivec4(texture(uTex, fUv) * 255.0 + 0.5);
++    if (uMode == 1) {
++        int a = (raw.a >> 3) & 31;
++        if (a == 0) discard;
++        oColor = vec4(vec3(apply_brightness(raw.rgb >> 2)) / 255.0, float(a + 1) / 32.0);
++        return;
++    }
++    if (uMode == 2 && raw.a == 0) discard;
++    oColor = vec4(vec3(apply_brightness(raw.rgb >> 2)) / 255.0, 1.0);
++}
++)";
++
++void init_rgba_tex(GLuint tex, int w, int h) {
++    glBindTexture(GL_TEXTURE_2D, tex);
++    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++}
++
++void attach_color0(GLuint fb, GLuint tex) {
++    glBindFramebuffer(GL_FRAMEBUFFER, fb);
++    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
++    glDrawBuffer(GL_COLOR_ATTACHMENT0);
++}
+ 
+ void copy_texture(GLuint read_fb, GLuint draw_fb, GLuint from, GLuint to, int w, int h) {
+     glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);
+@@ -129,4 +205,181 @@ uint32_t GlBetween::render(melonDS::GLRenderer& r) {
+     return out_tex_;
+ }
+ 
++GlCinematic::~GlCinematic() {
++    release();
++    if (vbo_) glDeleteBuffers(1, &vbo_);
++    if (vao_) glDeleteVertexArrays(1, &vao_);
++    if (prog_) glDeleteProgram(prog_);
++}
++
++void GlCinematic::release() {
++    GLuint textures[5] = {saved_3d_, out_tex_, raw_2d_tex_, overlay_tex_[0], overlay_tex_[1]};
++    GLuint fbs[6] = {out_fb_, raw_2d_fb_, read_fb_, draw_fb_, overlay_fb_[0], overlay_fb_[1]};
++    if (saved_3d_ || out_tex_) glDeleteTextures(5, textures);
++    if (out_fb_ || read_fb_) glDeleteFramebuffers(6, fbs);
++    saved_3d_ = out_tex_ = raw_2d_tex_ = overlay_tex_[0] = overlay_tex_[1] = 0;
++    out_fb_ = raw_2d_fb_ = read_fb_ = draw_fb_ = overlay_fb_[0] = overlay_fb_[1] = 0;
++    w_ = h_ = 0;
++    last_frame_ = 0;
++}
++
++bool GlCinematic::ensure_pipeline() {
++    if (prog_) return true;
++    GLuint prog = 0;
++    if (!melonDS::OpenGL::CompileVertexFragmentProgram(prog, kCinematicVS, kCinematicFS, "CinematicCompose",
++                                                       {{"vPos", 0}}, {{"oColor", 0}}))
++        return false;
++    prog_ = prog;
++    u_tex_ = glGetUniformLocation(prog, "uTex");
++    u_mode_ = glGetUniformLocation(prog, "uMode");
++    u_bright_mode_ = glGetUniformLocation(prog, "uBrightMode");
++    u_bright_factor_ = glGetUniformLocation(prog, "uBrightFactor");
++
++    const float quad[] = {0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 1.f};
++    glGenBuffers(1, &vbo_);
++    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
++    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
++    glGenVertexArrays(1, &vao_);
++    glBindVertexArray(vao_);
++    glEnableVertexAttribArray(0);
++    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
++    glBindVertexArray(0);
++    return true;
++}
++
++void GlCinematic::ensure_size(int w, int h) {
++    if (w == w_ && h == h_) return;
++    release();
++    w_ = w;
++    h_ = h;
++    GLuint t[5]{}, f[6]{};
++    glGenTextures(5, t);
++    glGenFramebuffers(6, f);
++    saved_3d_ = t[0];
++    out_tex_ = t[1];
++    raw_2d_tex_ = t[2];
++    overlay_tex_[0] = t[3];
++    overlay_tex_[1] = t[4];
++    out_fb_ = f[0];
++    raw_2d_fb_ = f[1];
++    read_fb_ = f[2];
++    draw_fb_ = f[3];
++    overlay_fb_[0] = f[4];
++    overlay_fb_[1] = f[5];
++    for (GLuint tex : t) init_rgba_tex(tex, w, h);
++    attach_color0(out_fb_, out_tex_);
++    attach_color0(raw_2d_fb_, raw_2d_tex_);
++    attach_color0(overlay_fb_[0], overlay_tex_[0]);
++    attach_color0(overlay_fb_[1], overlay_tex_[1]);
++    glBindFramebuffer(GL_FRAMEBUFFER, 0);
++}
++
++uint32_t GlCinematic::render(melonDS::GLRenderer& r, melonDS::NDS& nds, gx::Streams& streams,
++                             double aspect, CinematicUiPlacement ui, CinematicCamera camera, uint64_t frame) {
++    const GLuint tex3d = r.*get(Output3D{});
++    GLint w = 0, h = 0;
++    glActiveTexture(GL_TEXTURE0);
++    glBindTexture(GL_TEXTURE_2D, tex3d);
++    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
++    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
++    if (w <= 0 || h <= 0 || !ensure_pipeline()) return 0;
++    ensure_size(w, h);
++
++    auto draw_quad = [&](GLuint fb, GLuint src_tex, int mode, uint16_t brightness,
++                         int vx, int vy, int vw, int vh, bool blend) {
++        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb);
++        glDisable(GL_DEPTH_TEST);
++        glDisable(GL_STENCIL_TEST);
++        glDisable(GL_SCISSOR_TEST);
++        glDisable(GL_CULL_FACE);
++        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
++        if (blend) {
++            glEnable(GL_BLEND);
++            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
++        } else {
++            glDisable(GL_BLEND);
++        }
++        glViewport(vx, vy, vw, vh);
++        glUseProgram(prog_);
++        glUniform1i(u_tex_, 0);
++        glUniform1i(u_mode_, mode);
++        glUniform1i(u_bright_mode_, int((brightness >> 14) & 3));
++        glUniform1i(u_bright_factor_, std::min<int>(brightness & 31, 16));
++        glActiveTexture(GL_TEXTURE0);
++        glBindTexture(GL_TEXTURE_2D, src_tex);
++        glBindVertexArray(vao_);
++        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
++    };
++
++    copy_texture(read_fb_, draw_fb_, tex3d, saved_3d_, w, h);
++    const int scale = std::max(1, w / 256);
++    const CinematicUiPlacement p = valid_cinematic_ui_placement(ui) ? ui : CinematicUiPlacement{};
++    const bool rendered = streams.render_cinematic(aspect, [&](bool overlay) {
++        r.Start3DRendering();
++        if (!overlay) {
++            draw_quad(out_fb_, tex3d, 0, nds.GPU.MasterBrightnessA, 0, 0, w, h, false);
++        } else {
++            draw_quad(out_fb_, tex3d, 1, nds.GPU.MasterBrightnessA,
++                      p.x * scale, p.y * scale, p.width * scale, p.height * scale, true);
++        }
++    }, camera);
++    copy_texture(read_fb_, draw_fb_, saved_3d_, tex3d, w, h);
++    if (!rendered) {
++        glDisable(GL_BLEND);
++        glUseProgram(0);
++        glBindVertexArray(0);
++        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        return 0;
++    }
++
++    const int cur = overlay_cur_;
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, overlay_fb_[cur]);
++    glDisable(GL_SCISSOR_TEST);
++    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
++    glClearColor(0.f, 0.f, 0.f, 0.f);
++    glClear(GL_COLOR_BUFFER_BIT);
++
++    for (unsigned screen = 0; screen < 2; ++screen) {
++        const int eng_num = nds.GPU.ScreenSwap ? int(screen) : int(1 - screen);
++        const auto& gpu2d = eng_num ? nds.GPU.GPU2D_B : nds.GPU.GPU2D_A;
++        const uint32_t dispmode = (gpu2d.DispCnt >> 16) & (eng_num ? 1u : 3u);
++        if (!nds.GPU.ScreensEnabled || !gpu2d.Enabled || gpu2d.ForcedBlank || dispmode != 1) continue;
++
++        auto& eng_gl = static_cast<melonDS::GLRenderer2D&>(*(eng_num ? r.*get(Engine2DB{}) : r.*get(Engine2DA{})));
++        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, raw_2d_fb_);
++        glDisable(GL_SCISSOR_TEST);
++        glClearColor(0.f, 0.f, 0.f, 0.f);
++        glClear(GL_COLOR_BUFFER_BIT);
++
++        const GLuint comp_prog = eng_gl.*get(CompositorProg{});
++        const GLint u_ov = glGetUniformLocation(comp_prog, "uOverlayOnly");
++        glUseProgram(comp_prog);
++        glUniform1i(u_ov, 1);
++        GLuint& own_fb = eng_gl.*get(OutputFB2D{});
++        const GLuint prev_fb = own_fb;
++        own_fb = raw_2d_fb_;
++        (eng_gl.*get(Composite2D{}))(0, 192);
++        own_fb = prev_fb;
++        glUseProgram(comp_prog);
++        glUniform1i(u_ov, 0);
++
++        const uint16_t bright = eng_num ? nds.GPU.MasterBrightnessB : nds.GPU.MasterBrightnessA;
++        draw_quad(overlay_fb_[cur], raw_2d_tex_, 2, bright, 0, 0, w, h, false);
++    }
++
++    if (last_frame_ + 1 == frame)
++        draw_quad(out_fb_, overlay_tex_[1 - cur], 3, 0, 0, 0, w, h, false);
++    draw_quad(out_fb_, overlay_tex_[cur], 3, 0, 0, 0, w, h, false);
++    last_frame_ = frame;
++    overlay_cur_ = 1 - cur;
++
++    glDisable(GL_BLEND);
++    glDisable(GL_SCISSOR_TEST);
++    glUseProgram(0);
++    glBindVertexArray(0);
++    glActiveTexture(GL_TEXTURE0);
++    glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    return out_tex_;
++}
++
+ }  // namespace ntr
+diff --git a/runtime/src/gl_between.hpp b/runtime/src/gl_between.hpp
+index ce2e43b..d153708 100644
+--- a/runtime/src/gl_between.hpp
++++ b/runtime/src/gl_between.hpp
+@@ -6,11 +6,17 @@
+ 
+ #include <cstdint>
+ 
++#include "ntr/cinematic.hpp"
++
+ namespace melonDS {
+ class GLRenderer;
++class NDS;
+ }
+ 
+ namespace ntr {
++namespace gx {
++class Streams;
++}
+ 
+ class GlBetween {
+ public:
+@@ -34,4 +40,30 @@ private:
+     uint32_t read_fb_ = 0, draw_fb_ = 0;  // for copying 3D outputs
+ };
+ 
++class GlCinematic {
++public:
++    GlCinematic() = default;
++    GlCinematic(const GlCinematic&) = delete;
++    GlCinematic& operator=(const GlCinematic&) = delete;
++    ~GlCinematic();  // needs the GL context current
++
++    uint32_t render(melonDS::GLRenderer& renderer, melonDS::NDS& nds, gx::Streams& streams,
++                    double aspect, CinematicUiPlacement ui, CinematicCamera camera, uint64_t frame);
++
++private:
++    bool ensure_pipeline();
++    void ensure_size(int w, int h);
++    void release();
++
++    int w_ = 0, h_ = 0;
++    uint32_t prog_ = 0, vao_ = 0, vbo_ = 0;
++    int u_tex_ = -1, u_mode_ = -1, u_bright_mode_ = -1, u_bright_factor_ = -1;
++    uint32_t saved_3d_ = 0, out_tex_ = 0, raw_2d_tex_ = 0;
++    uint32_t overlay_tex_[2] = {};
++    uint32_t out_fb_ = 0, raw_2d_fb_ = 0, read_fb_ = 0, draw_fb_ = 0;
++    uint32_t overlay_fb_[2] = {};
++    int overlay_cur_ = 0;
++    uint64_t last_frame_ = 0;
++};
++
+ }  // namespace ntr
+diff --git a/runtime/src/runtime.cpp b/runtime/src/runtime.cpp
+index 52139e2..2961e7c 100644
+--- a/runtime/src/runtime.cpp
++++ b/runtime/src/runtime.cpp
+@@ -696,6 +696,14 @@ const uint32_t* RuntimeImpl::render_cinematic(double aspect, CinematicUiPlacemen
+     return cinematic_renderer_->add_overlays(overlay_pixels_);
+ }
+ 
++unsigned RuntimeImpl::render_cinematic_gl(double aspect, CinematicUiPlacement ui, CinematicCamera camera) {
++    if (!gx_ || !options.cinematic_camera) return 0;
++    auto* gl = dynamic_cast<melonDS::GLRenderer*>(&nds->GetRenderer());
++    if (!gl) return 0;
++    if (!gl_cinematic_) gl_cinematic_ = std::make_unique<GlCinematic>();
++    return gl_cinematic_->render(*gl, *nds, *gx_, aspect, ui, camera, frames_);
++}
++
+ void RuntimeImpl::capture_overlay_line(void* context, const melonDS::GPU2D& engine, u32 line,
+                                        const u32* foreground, const u32* composite) {
+     if (!context || line >= 192) return;
+@@ -1023,16 +1031,21 @@ void RuntimeImpl::apply_video(VideoSettings s) {
+     s.hud_scale = std::clamp(s.hud_scale, 50, 200);
+     melonDS::FfccHudEdges = s.hud_edges && s.wide_extra;
+     melonDS::FfccHudScale = s.hud_scale;
+-    // (A new width needs the renderer's textures made again: a new renderer does that.)
+-    if (!video_applied_ || s.renderer != video_.renderer || s.wide_extra != video_.wide_extra) {
+-        if (s.renderer == Renderer::Software)
++    // (A new width or GL scale needs synced VRAM captures and fresh renderer state: a new renderer does both.)
++    if (!video_applied_ || s.renderer != video_.renderer || s.wide_extra != video_.wide_extra ||
++        (s.renderer != Renderer::Software && s.scale != video_.scale)) {
++        if (s.renderer == Renderer::Software) {
++            gl_cinematic_.reset();
++            between_.reset();
+             n.SetRenderer(std::make_unique<melonDS::SoftRenderer>(n));
+-        else
++        } else {
+             n.SetRenderer(std::make_unique<melonDS::GLRenderer>(n, s.renderer == Renderer::Compute));
++        }
+         if (s.renderer != Renderer::Software && !dynamic_cast<melonDS::GLRenderer*>(&n.GetRenderer())) {
+             log("video: the %s renderer failed to start, using the software renderer\n", renderer_name(s.renderer));
+             s.renderer = Renderer::Software;
+         }
++        n.GPU.GPU3D.RenderFrameIdentical = false;
+     }
+     melonDS::RendererSettings rs{s.scale, s.threaded, s.hires_coordinates, s.better_polygons};
+     n.GetRenderer().SetRenderSettings(rs);
+diff --git a/runtime/src/runtime_internal.hpp b/runtime/src/runtime_internal.hpp
+index b67960c..a0239ea 100644
+--- a/runtime/src/runtime_internal.hpp
++++ b/runtime/src/runtime_internal.hpp
+@@ -68,7 +68,8 @@ public:
+     void set_cpu_speed(int multiplier) override { pending_cpu_speed_ = multiplier; }
+     unsigned render_between(double x) override;
+     const uint32_t* render_cinematic(double aspect, CinematicUiPlacement ui = {}, CinematicCamera camera = {}) override;
++    unsigned render_cinematic_gl(double aspect, CinematicUiPlacement ui = {}, CinematicCamera camera = {}) override;
+     GraphicsContext inspect_graphics(bool include_projection = true) const override;
+     static void capture_overlay_line(void* context, const melonDS::GPU2D& engine, u32 line,
+                                       const u32* foreground, const u32* composite);
+ 
+@@ -204,6 +205,7 @@ private:
+     // GX command streams: frame interpolation, --gx-probe, --gx-check.
+     std::unique_ptr<gx::Streams> gx_;
+     std::unique_ptr<GlBetween> between_;  // frames between emulated frames (display_rate)
++    std::unique_ptr<GlCinematic> gl_cinematic_;
+     std::unique_ptr<CinematicRenderer> cinematic_renderer_;
+     std::array<std::vector<uint32_t>, 2> overlay_pixels_, previous_overlay_pixels_;
+     uint64_t last_cinematic_frame_ = 0;
+diff --git a/third_party/CMakeLists.txt b/third_party/CMakeLists.txt
+index b2ab296..c64b9eb 100644
+--- a/third_party/CMakeLists.txt
++++ b/third_party/CMakeLists.txt
+@@ -218,7 +218,9 @@ ffcc_patch(shader_2DCompositorFS 2DCompositorFS.glsl "    if (uScanline[line].Mo
+ ffcc_patch(shader_2DCompositorFS 2DCompositorFS.glsl "    layercol[3] = BG3CalcAndFetch(bgcoord, line);\n"
+   "    layercol[3] = BG3CalcAndFetch(bgcoord, line);\n    if (outside)\n    {\n        layercol[1] = vec4(0);\n        layercol[2] = vec4(0);\n        layercol[3] = vec4(0);\n        if (!uEnable3D) layercol[0] = vec4(0);\n    }\n")
+ ffcc_patch(shader_2DCompositorFS 2DCompositorFS.glsl "uniform int uExtra;\n"
+-  "uniform int uExtra;\nuniform vec4 uTextHud, uTextRect; // the pickup text: (anchor.xy, x offset, scale), (x0, y0, x1, y1)\n")
++  "uniform int uExtra;\nuniform int uOverlayOnly;\nuniform vec4 uTextHud, uTextRect; // the pickup text: (anchor.xy, x offset, scale), (x0, y0, x1, y1)\n")
++ffcc_patch(shader_2DCompositorFS 2DCompositorFS.glsl "    return vec4(vec3(col1.rgb << 2) / 255.0, 1);\n"
++  "    if (uOverlayOnly != 0)\n    {\n        bool keep = (mask1 == (1 << 4)) ? (objflags.r != 2) : (\n            (mask1 == 1 && uBGConfig[0].Type <= 3) ||\n            (mask1 == 2 && uBGConfig[1].Type <= 3) ||\n            (mask1 == 4 && uBGConfig[2].Type <= 3) ||\n            (mask1 == 8 && uBGConfig[3].Type <= 3));\n        if (!keep) return vec4(0);\n    }\n    return vec4(vec3(col1.rgb << 2) / 255.0, 1);\n")
+ ffcc_patch(shader_2DCompositorFS 2DCompositorFS.glsl "        if (!uEnable3D) layercol[0] = vec4(0);\n    }\n"
+   "        if (!uEnable3D) layercol[0] = vec4(0);\n    }\n    if (uTextRect.z > uTextRect.x)  // (the pickup text of background 2, moved like the HUD)\n    {\n        vec2 a = uTextHud.xy, o = vec2(uTextHud.z, 0);\n        vec2 lo = a + (uTextRect.xy - a) * uTextHud.w + o, hi = a + (uTextRect.zw - a) * uTextHud.w + o;\n        vec2 p = fTexcoord.xy;\n        if (all(greaterThanEqual(p, lo)) && all(lessThan(p, hi)))\n        {\n            vec2 q = a + (p - o - a) / uTextHud.w;\n            layercol[2] = BG2CalcAndFetch(vec2(q.x, fract(q.y)), clamp(int(q.y), 0, 191));\n        }\n        else if (all(greaterThanEqual(p, uTextRect.xy)) && all(lessThan(p, uTextRect.zw)))\n            layercol[2] = vec4(0);\n    }\n")
+ ffcc_patch(shader_2DCompositorFS 2DCompositorFS.glsl "    if (uScanline[line].MosaicSize.z > 0)\n    {\n        CalcSpriteMosaic("

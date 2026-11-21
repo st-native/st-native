@@ -3,17 +3,21 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "audio/audio_settings.hpp"
 #include "input/controls.hpp"
 #include "present/screen_enhancements.hpp"
+#include "present/internal_resolution.hpp"
 #include "present/screen_layout.hpp"
 
 struct SDL_Window;
 union SDL_Event;
 
 namespace st {
+
+enum class GameMenu : uint8_t;
 
 struct GameLaunch {
     std::filesystem::path rom, module;
@@ -26,6 +30,7 @@ struct GameLaunch {
     AudioSettings audio;
     bool pause_on_menu = false;
     SecondaryViewSettings secondary;
+    int internal_scale = default_internal_scale;
     input::Controls controls;
 };
 
@@ -34,10 +39,38 @@ struct GameResult {
     bool close_requested;
 };
 
+struct GameFrameInput {
+    const uint32_t* top = nullptr;
+    const uint32_t* bottom = nullptr;
+    const uint32_t* cinematic_pixels = nullptr;
+    unsigned gl_screens_texture = 0;
+    unsigned gl_cinematic_texture = 0;
+    int scale = 1;
+    bool shared_scene = false;
+    uint64_t frame_number = 0;
+    uint64_t published_ns = 0;
+    GameMenu menu{};
+};
+
+using SoftwareFrameOverlay = std::function<void(uint32_t* bottom, uint32_t* cinematic, GameMenu menu)>;
+
+struct PresentedFrameInfo {
+    bool drew = false;
+    bool shared_scene = false;
+    bool cinematic = false;
+    uint64_t frame_number = 0;
+    uint64_t published_ns = 0;
+};
+
 class GamePresentation {
 public:
     virtual ~GamePresentation() = default;
     virtual SDL_Window* window() const = 0;
+    virtual bool bind_worker_graphics() { return false; }
+    virtual void unbind_worker_graphics() {}
+    virtual bool publish_game_frame(const GameFrameInput& frame) = 0;
+    virtual bool present_published_game(bool touch_captured, PresentedFrameInfo& info, bool render = true,
+                                        const SoftwareFrameOverlay& overlay = {}) = 0;
     // Three 256x192 BGRA planes: original top, original touch, and the optional cinematic view.
     virtual bool update_game_frame(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) = 0;
     virtual bool present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) = 0;
@@ -53,6 +86,8 @@ public:
     virtual void set_audio_settings(const AudioSettings& audio) = 0;
     virtual bool pause_on_menu() const = 0;
     virtual void set_pause_on_menu(bool pause) = 0;
+    virtual void set_internal_scale(int scale) = 0;
+    virtual int internal_scale() const = 0;
     virtual input::Controls controls_settings() const = 0;
     virtual void set_controls_settings(const input::Controls& controls) = 0;
     virtual void observe_input(const SDL_Event& event) = 0;
