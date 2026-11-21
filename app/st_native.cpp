@@ -393,14 +393,7 @@ public:
                          (unsigned long long)f.ram_hash);
         if (!o_.control.empty() && !control(f)) return false;
         const bool detected_scene = track_scene_ && screen_context_.update(*rt_, f, frame_);
-        auto game_menu = st::GameMenu::none;
-        if (track_scene_ && screen_context_.touch_only()) {
-            const auto phase = rt_->read_main_ram_word(0x022e560c);
-            const auto dialog = (rt_->read_main_ram_word(0x022610a4) >> 8) & 255;
-            game_menu = st::file_menu(phase, dialog, name_keyboard.active());
-        } else if (track_scene_ && screen_context_.narration()) {
-            game_menu = st::GameMenu::prologue;
-        }
+        auto game_menu = track_scene_ ? screen_context_.menu(*rt_, f, name_keyboard.active()) : st::GameMenu::none;
         // The opening context is verified independently. Alpha here only determines whether
         // the existing prompt's 2D layer needs replacement; it never classifies a game scene.
         const bool opening = track_scene_ && screen_context_.scene() == st::CinematicScene::opening;
@@ -1214,6 +1207,8 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     if (!s.shot.empty()) controller_shot = s.shot;
                     else {
                         if (s.event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION) s.event.gaxis.which = active_pad();
+                        else if (s.event.type == SDL_EVENT_KEY_DOWN || s.event.type == SDL_EVENT_KEY_UP)
+                            s.event.key.windowID = SDL_GetWindowID(window);
                         else s.event.gbutton.which = active_pad();
                         if (!SDL_PushEvent(&s.event)) view_error = sh.quit = true;
                     }
@@ -1380,27 +1375,30 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                     }
                     if (menu_focus.active()) {
                         move_focus(actions);
-                        if (rising & st::input::bit(A::menu_accept)) {
+                        const auto tap_item = [&](st::MenuItem item) { tap_menu(item.center_x(),item.center_y()); };
+                        if (rising & st::input::bit(A::menu_back)) {
+                            if (game_menu == st::GameMenu::name) tap_menu(64,176);
+                            else if (const auto item = st::menu_back_item(game_menu)) tap_item(*item);
+                            else sh.pressed |= st::input::bit(A::b);
+                        } else if (st::option_value(game_menu,menu_focus.index())) {
+                            const bool left = rising & st::input::bit(A::left);
+                            const bool next = rising & (st::input::bit(A::right) | st::input::bit(A::menu_accept));
+                            if (left != next) {
+                                menu_focus.select();
+                                tap_item(st::option_arrow(menu_focus.index(),left ? -1 : 1));
+                            }
+                        } else if (rising & st::input::bit(A::menu_accept)) {
                             menu_focus.select();
-                            if (const auto* item = menu_focus.item()) tap_menu(item->center_x(),item->center_y());
+                            if (const auto* item = menu_focus.item()) tap_item(*item);
                         }
                         if (game_menu == st::GameMenu::name) {
                             if (rising & st::input::bit(A::start)) tap_menu(190,176);
-                            if (rising & st::input::bit(A::menu_back)) tap_menu(64,176);
                             if (rising & st::input::bit(A::name_erase)) host.name_keyboard.queue(st::NameKeyboard::backspace);
                             if (rising & st::input::bit(A::name_clear)) {
                                 host.name_keyboard.queue(st::NameKeyboard::select_all);
                                 host.name_keyboard.queue(st::NameKeyboard::backspace);
                             }
-                        } else {
-                            if (rising & st::input::bit(A::menu_back)) {
-                                if (game_menu == st::GameMenu::file_actions || game_menu == st::GameMenu::mode) tap_menu(15,176);
-                                else if (game_menu == st::GameMenu::confirm_name || game_menu == st::GameMenu::confirm_hand)
-                                    tap_menu(204,137);
-                                else sh.pressed |= st::input::bit(A::b);
-                            }
-                            sh.pressed |= rising & st::input::bit(A::start);
-                        }
+                        } else sh.pressed |= rising & st::input::bit(A::start);
                         sh.held = 0;
                     } else {
                         sh.pressed |= rising & 0xfff;

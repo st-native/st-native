@@ -145,8 +145,8 @@ Start accepts the name, and L3 still opens port settings.
   remains unconfirmed. Regenerate the letter masks with `tools/testing/render_title_prompt.py`.
 - In the narrated prologue, **Skip opening story** is remappable and defaults to Start/Enter.
   It opens the original Skip control and activates it in the same scene.
-- The PC adapter uses the verified file-menu display state, two read-only BKIE menu fields and the
-  existing editable-name hook. Unsupported contexts retain the original DS inputs. The original title
+- The PC adapter uses verified display states and read-only BKIE menu fields, plus the existing
+  editable-name hook. Unsupported contexts retain the original DS inputs. The original title
   art returns on the next launch after disabling PC game menus.
 - Changing the selected option plays the original name keyboard's press sample. The port reads the
   wave from the player's ROM, plays one short pass at the pitch measured in the game and mixes it
@@ -168,6 +168,19 @@ the name keyboard, Yes/No, Start/Copy/Erase, and Adventure/Battle/Tag Mode/Optio
 with SDL's dummy audio driver: 11 cues entered the output stream for 11 selection changes, and a
 blocked Down produced none. The 3,000-frame original-input Gage replay still matches the reference.
 Listening on physical speakers remains untested.
+
+**Startup submenus.** Up and Down navigate Options. Left and Right change the selected value;
+Confirm on a value advances it. Mic Test, Cancel and OK use the same focus and confirmation
+bindings. Back exits Mic Test, cancels Options and selects No in confirmation dialogs. Copy and
+Erase start with No selected and use the game's own confirmation and save flow. The Battle lobby,
+Player List and waiting page support menu navigation. The Tag Mode back arrow is also available;
+choosing and moving treasures for exchange still uses touch or mouse.
+
+The extra contexts are tracked by replaying the original touch routes for BKIE rev. 0 and
+comparing display state and read-only RAM. Options and save dialogs reuse palette variants
+from SelectM. Battle lobby buttons use BselM_A and the list arrows use ListM. See
+`tests/rom/startup_options.txt` and `tests/rom/startup_side_menus.txt` for the controller and
+keyboard replays. Multiplayer sessions and physical microphone input are unverified.
 
 **Direct analog movement remains under investigation.** A read-only Forest Sanctuary checkpoint and
 idle/right/left/up replays verified the change and decay of the horizontal movement vector. A local

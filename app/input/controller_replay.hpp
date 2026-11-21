@@ -46,6 +46,13 @@ inline std::vector<ControllerStep> read_controller_replay(const std::filesystem:
             if (axis == SDL_GAMEPAD_AXIS_INVALID) throw std::runtime_error("Unknown controller replay axis");
             s.event.type = SDL_EVENT_GAMEPAD_AXIS_MOTION;
             s.event.gaxis.axis = axis; s.event.gaxis.value = Sint16(value);
+        } else if (kind == "key" && row >> value && (value == 0 || value == 1)) {
+            const auto key = SDL_GetScancodeFromName(name.c_str());
+            if (key == SDL_SCANCODE_UNKNOWN) throw std::runtime_error("Unknown keyboard replay key");
+            s.event.type = value ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+            s.event.key.scancode = key;
+            s.event.key.key = SDL_GetKeyFromScancode(key,SDL_KMOD_NONE,false);
+            s.event.key.down = value != 0;
         } else throw std::runtime_error("Invalid controller replay event");
         steps.push_back(s);
     }

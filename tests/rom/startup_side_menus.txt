@@ -1,0 +1,55 @@
+# SDL replay for --game-smoke with a read-only checkpoint populated in slot 2.
+# Use ST_NATIVE_SMOKE_FRAMES=3700. Exercise Battle lobby, Player List, and Tag Mode returns.
+# The Battle waiting page uses a single instance, without a connected peer.
+1000 button west 1
+1006 button west 0
+1150 button north 1
+1156 button north 0
+1350 button dpdown 1
+1356 button dpdown 0
+1390 button south 1
+1396 button south 0
+1530 button south 1
+1536 button south 0
+1670 button dpdown 1
+1676 button dpdown 0
+1710 button south 1
+1716 button south 0
+1950 shot battle_create_focused
+1980 button dpdown 1
+1986 button dpdown 0
+2010 button dpdown 1
+2016 button dpdown 0
+2040 button south 1
+2046 button south 0
+2170 shot player_list
+2200 button east 1
+2206 button east 0
+2330 shot battle_return
+2360 button dpdown 1
+2366 button dpdown 0
+2390 button south 1
+2396 button south 0
+2510 shot battle_wait
+2540 button east 1
+2546 button east 0
+2680 shot battle_back_from_wait
+2710 button east 1
+2716 button east 0
+2900 shot slots_after_battle
+2930 button dpdown 1
+2936 button dpdown 0
+2960 button south 1
+2966 button south 0
+3090 button south 1
+3096 button south 0
+3220 button dpdown 1
+3226 button dpdown 0
+3250 button dpdown 1
+3256 button dpdown 0
+3280 button south 1
+3286 button south 0
+3470 shot tag_mode
+3500 button east 1
+3506 button east 0
+3670 shot slots_after_tag

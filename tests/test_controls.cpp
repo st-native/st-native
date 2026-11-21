@@ -105,6 +105,16 @@ int main() {
     require(st::file_menu(2,0,false)==st::GameMenu::slots);
     require(st::file_menu(21,6,false)==st::GameMenu::confirm_name);
     require(st::file_menu(21,2,false)==st::GameMenu::none);
+    require(st::file_menu(18,2,false,1)==st::GameMenu::copy_notice);
+    require(st::file_menu(18,2,false,2)==st::GameMenu::confirm_copy);
+    require(st::file_menu(18,4,false,1)==st::GameMenu::none); // save still being written
+    require(st::file_menu(18,4,false,3)==st::GameMenu::copy_notice);
+    require(st::file_menu(18,5,false)==st::GameMenu::confirm_erase);
+    require(st::file_menu(22,0,false,0)==st::GameMenu::options);
+    require(st::file_menu(22,5,false,0)==st::GameMenu::options); // No returns to options
+    require(st::file_menu(22,11,false,0)==st::GameMenu::options); // reopened after saving
+    require(st::file_menu(22,0,false,4)==st::GameMenu::mic_test);
+    require(st::file_menu(22,5,false,6)==st::GameMenu::confirm_options);
     st::MenuFocus focus;
     focus.context(st::GameMenu::slots);
     require(focus.item()->center_y()==67);
@@ -117,6 +127,22 @@ int main() {
     require(focus.item()->center_x()==first+20);
     require(!focus.move(1,0,3)); // still inside the repeat delay
     require(focus.item()->center_x()==first+20);
+    for (const auto menu : {st::GameMenu::confirm_copy,st::GameMenu::confirm_erase}) {
+        focus.context(menu);
+        require(focus.index()==1);
+        require(st::menu_back_item(menu)->center_y()==137);
+        require(focus.move(0,-1,90));
+        require(focus.index()==0);
+    }
+    focus.context(st::GameMenu::options);
+    require(st::option_value(st::GameMenu::options,focus.index()));
+    require(!focus.move(1,0,100));
+    require(st::option_arrow(focus.index(),1).center_x()>230);
+    require(st::option_arrow(focus.index(),-1).center_x()<100);
+    require(focus.move(0,1,105));
+    require(focus.move(0,1,405));
+    require(focus.move(0,1,511));
+    require(focus.index()==3 && !st::option_value(st::GameMenu::options,focus.index()));
     focus.context(st::GameMenu::none);
     require(!focus.item());
 

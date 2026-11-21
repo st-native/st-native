@@ -49,8 +49,13 @@ your local module, `ST_NATIVE_SMOKE_LAYOUT=single`, `ST_NATIVE_SMOKE_FRAMES=5600
 checkpoint is explicitly selected. Optional outputs: `ST_NATIVE_SMOKE_CONTROLLER_SHOTS` (existing ignored directory),
 `ST_NATIVE_SMOKE_INPUT_PROFILE`, `ST_NATIVE_SMOKE_RECORD`, `ST_NATIVE_SMOKE_HASHES` and
 `ST_NATIVE_SMOKE_FRAME_PROFILE` (file paths below `build/`). These variables are ignored in ordinary play.
-Button/axis timestamps use guest frames. Focus repeat uses host time, so this live smoke tolerates timing
+Button, axis and key timestamps use guest frames. Focus repeat uses host time, so this live smoke tolerates timing
 variation and is not itself a deterministic hash reference. Use guest-input replays for deterministic regression.
+
+For Options and other startup branches, set `ST_NATIVE_SMOKE_SAVE` to your read-only checkpoint with a
+save in slot 2. Use `tests/rom/startup_options.txt` for Options, microphone test and save dialogs
+(4,600 frames), or `tests/rom/startup_side_menus.txt` for the Battle lobby, Player List and Tag Mode
+(3,700 frames). The Options replay uses both the default controller bindings and keyboard arrows, X and Z.
 
 | | Validated with |
 |---|---|
