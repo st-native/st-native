@@ -28,8 +28,25 @@
             <input type="submit" id="tab-map" value="Map" />
             <input type="submit" id="tab-features" value="Screen features" />
             <input type="submit" id="tab-audio" value="Audio" />
+            <input type="submit" id="tab-graphics" value="Graphics" />
             <input type="submit" id="tab-window" value="Window" />
             <input type="submit" id="tab-game" value="Game" />
+          </div>
+          <div id="settings-graphics" class="settings-page">
+          <div class="field">
+            <label for="internal-resolution">Internal resolution</label>
+            <select id="internal-resolution">
+              <option value="256x192" selected="selected">256x192 (Native)</option>
+              <option value="512x384">512x384</option>
+              <option value="768x576">768x576</option>
+              <option value="1024x768">1024x768</option>
+              <option value="1280x960">1280x960</option>
+              <option value="1536x1152">1536x1152</option>
+              <option value="2048x1536">2048x1536</option>
+              <option value="2560x1920">2560x1920</option>
+              <option value="3072x2304">3072x2304</option>
+            </select>
+          </div>
           </div>
           <div id="settings-window" class="settings-page">
           <div class="field">

@@ -279,3 +279,8 @@ culling are verified; the default is 4:3.
 - Integration (ROM-free): UI smoke test drives the overlay to each mode and checks view rects (FFCC `ui_smoke` style).
 - Local (ROM): scripted inputs (`--input-script`) that tap known DS pixels in each mode and compare the game's touch
   reaction; second-window close/reopen during a drag; Steam Deck Gaming Mode run.
+
+**Verified on Windows.** The launcher's **Graphics** tab and the pause menu (`Esc` or `F1`)
+offer the same internal resolutions, from **256x192 (Native)** through **3072x2304** per DS
+screen. In the pause menu, the new resolution takes effect when the game resumes. Window size
+and screen placement are controlled separately under **Window** and **Screens**.

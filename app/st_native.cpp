@@ -9,6 +9,8 @@
 //     --save <file>          the cartridge save (default: st-native's folder in the user's application data, BKIE.sav)
 //     --no-save              start from a blank cartridge save and write nothing
 //     --scale <n>            initial window size, in multiples of 256x384 (default 2)
+//     --internal-scale <n>   internal render resolution multiplier, 1 (native 256x192) to 16 (OpenGL; default 1)
+//     --resolution <WxH>     internal render resolution per screen (e.g. 256x192, 512x384, 1536x1152, 3072x2304)
 //     --fullscreen           start in fullscreen (F11 switches modes while playing)
 //     --script <file>        scripted input (format below), on top of the keyboard, mouse and gamepad
 //     --headless             no window, no sound, no pacing: for scripted runs (needs --exit-after or a `quit` line)
@@ -93,6 +95,8 @@
 #include "audio/mic_source.hpp"
 #include "game_session.hpp"
 #include "name_keyboard.hpp"
+#include "present/gl_frame_bridge.hpp"
+#include "present/internal_resolution.hpp"
 #include "screen_context.hpp"
 #include "st_hooks.hpp"
 #include "st_probe.hpp"
@@ -127,7 +131,7 @@ struct Options {
     bool no_save = false, read_only_save = false, headless = false, perf = false, trace_threads = false,
          trace_calls = false, slow_cart = false, fullscreen = false, gx_check = false, preview_tower_camera = false,
          layer_shots = false;
-    int scale = 2, cpu_speed = 4, scene_stride = 30;
+    int scale = 2, internal_scale = st::default_internal_scale, cpu_speed = 4, scene_stride = 30;
     uint32_t screen_features = st::ScreenEnhancements{}.mask();
     st::AudioSettings audio;
     double cinematic_aspect = 0;
@@ -238,8 +242,9 @@ bool parse_script(const fs::path& path, std::vector<Step>& steps, std::string& e
 }
 
 // Both screens, top above bottom, as a 32-bit BMP (the runtime's 0xAARRGGBB is BMP's byte order).
-bool write_bmp(const fs::path& path, const uint32_t* top, const uint32_t* bottom) {
-    const uint32_t w = kW, h = bottom ? 2 * kH : kH, size = w * h * 4;
+bool write_bmp(const fs::path& path, const uint32_t* top, const uint32_t* bottom,
+               int width = kW, int screen_height = kH) {
+    const uint32_t w = uint32_t(width), h = uint32_t(bottom ? 2 * screen_height : screen_height), size = w * h * 4;
     uint8_t hdr[54] = {'B', 'M'};
     auto put32 = [&](int at, uint32_t v) { std::memcpy(hdr + at, &v, 4); };
     put32(2, 54 + size);
@@ -253,10 +258,24 @@ bool write_bmp(const fs::path& path, const uint32_t* top, const uint32_t* bottom
     std::ofstream f(path, std::ios::binary);
     f.write(reinterpret_cast<const char*>(hdr), sizeof hdr);
     for (int y = int(h) - 1; y >= 0; y--) {  // bottom-up
-        const uint32_t* row = y < kH ? top + y * kW : bottom + (y - kH) * kW;
-        f.write(reinterpret_cast<const char*>(row), kW * 4);
+        const uint32_t* row = y < screen_height ? top + size_t(y) * w : bottom + size_t(y - screen_height) * w;
+        f.write(reinterpret_cast<const char*>(row), std::streamsize(w * 4));
     }
     return bool(f);
+}
+
+ntr::VideoSettings make_video_settings(int internal_scale) {
+    ntr::VideoSettings v;
+    const int clamped = std::clamp(internal_scale, 1, st::max_internal_scale);
+    if (clamped > 1) {
+        v.renderer = ntr::Renderer::OpenGL;
+        v.scale = clamped;
+        v.better_polygons = true;
+    } else {
+        v.renderer = ntr::Renderer::Software;
+        v.scale = 1;
+    }
+    return v;
 }
 
 bool write_atomically(const fs::path& path, const uint8_t* data, size_t size) {
@@ -279,7 +298,8 @@ std::vector<uint8_t> read_file(const fs::path& path) {
 // ---- state shared by the main thread (window, events) and the game thread (runtime)
 struct Shared {
     std::mutex m;
-    std::vector<uint32_t> pixels = std::vector<uint32_t>(kW * kH * 3);
+    std::vector<uint32_t> pixels = std::vector<uint32_t>(kW * kH * 2);
+    int pixel_scale = 1;
     bool fresh = false, shared_scene = false, cinematic = false;
     uint64_t frame_number = 0, published_ns = 0;
     uint32_t frame_event = 0;
@@ -301,8 +321,9 @@ void queue_name_text(st::NameKeyboard& keyboard, std::string_view text) {
 
 class StHost : public st::NameHost {
 public:
-    StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes, FILE* mic_log, bool track_scene)
+    StHost(const Options& o, Shared& sh, std::vector<Step> script, FILE* hashes, FILE* mic_log, bool track_scene, st::GamePresentation* presentation)
         : o_(o), sh_(sh), script_(std::move(script)), hashes_(hashes), track_scene_(track_scene),
+          presentation_(presentation), applied_internal_scale_(o.internal_scale),
           screen_context_(o.preview_tower_camera), audio_settings_(o.audio) {
         mic_.set_settings(o.audio);
         mic_.set_log(mic_log, &frame_);
@@ -311,6 +332,7 @@ public:
         std::lock_guard lock(audio_mutex_);
         rt_ = rt;
     }
+    void set_offscreen_gl(st::OffscreenGlContext* gl) { offscreen_gl_ = gl; }
     uint64_t frames() const { return frame_; }
     uint64_t interp_total() const { return interp_total_; }
     uint64_t cinematic_frames() const { return cinematic_frames_; }
@@ -412,36 +434,63 @@ public:
         const double aspect = o_.cinematic_aspect > 0 ? o_.cinematic_aspect : sh_.cinematic_aspect.load();
         const auto camera_start = profile_ ? SDL_GetTicksNS() : 0;
         const uint32_t* cinematic = nullptr;
+        unsigned cinematic_gl = 0;
         if (shared_scene && aspect > 0) {
             if (screen_context_.touch_only()) cinematic = f.bottom;
             else if (screen_context_.narration()) {
                 if (st::compose_subtitles(narration_pixels_.data(), f.bottom, f.foreground_top,
                                          {screen_context_.narration_text_offset()}))
                     cinematic = narration_pixels_.data();
-            } else cinematic = rt_->render_cinematic(aspect, screen_context_.ui_placement(), screen_context_.camera());
+            } else if (rt_->video().renderer == ntr::Renderer::Software) cinematic = rt_->render_cinematic(aspect, screen_context_.ui_placement(), screen_context_.camera());
+            else cinematic_gl = rt_->render_cinematic_gl(aspect, screen_context_.ui_placement(), screen_context_.camera());
         }
         const double camera_ms = profile_ ? double(SDL_GetTicksNS() - camera_start) / 1e6 : 0;
-        cinematic_frames_ += cinematic != nullptr;
-        if (!o_.headless && f.top && f.bottom) {
-            bool wake = false;
-            {
-                std::lock_guard<std::mutex> lock(sh_.m);
-                wake = !sh_.fresh;
-                std::memcpy(sh_.pixels.data(), f.top, kW * kH * 4);
-                std::memcpy(sh_.pixels.data() + kW * kH, f.bottom, kW * kH * 4);
-                sh_.shared_scene = shared_scene;
-                sh_.cinematic = cinematic != nullptr;
-                if (cinematic) std::memcpy(sh_.pixels.data() + 2 * kW * kH, cinematic, kW * kH * 4);
-                sh_.frame_number = frame_;
-                sh_.published_ns = SDL_GetTicksNS();
-                sh_.fresh = true;
-            }
-            // Coalesce readiness notifications while a newer frame is already pending. Wake
-            // the window promptly instead of adding up to 4 ms of polling jitter to each frame.
-            if (wake && sh_.frame_event) {
-                SDL_Event event{};
-                event.type = sh_.frame_event;
-                SDL_PushEvent(&event);
+        const bool has_cinematic = cinematic != nullptr || cinematic_gl != 0;
+        cinematic_frames_ += has_cinematic;
+        if (!o_.headless) {
+            if (presentation_) {
+                const uint64_t published_ns = SDL_GetTicksNS();
+                const bool wake = presentation_->publish_game_frame({
+                    f.top, f.bottom, cinematic, f.gl_texture, cinematic_gl,
+                    std::max(1, f.scale), shared_scene, frame_, published_ns,
+                });
+                if (wake && sh_.frame_event) {
+                    SDL_Event event{};
+                    event.type = sh_.frame_event;
+                    SDL_PushEvent(&event);
+                }
+            } else if ((f.top && f.bottom) || (f.gl_texture && offscreen_gl_)) {
+                const int s = f.top ? 1 : std::max(1, f.scale);
+                const size_t plane = size_t(kW * s) * size_t(kH * s);
+                bool ready_pixels = false;
+                if (f.top && f.bottom) {
+                    cli_top_.assign(f.top, f.top + plane);
+                    cli_bottom_.assign(f.bottom, f.bottom + plane);
+                    ready_pixels = true;
+                } else {
+                    ready_pixels = offscreen_gl_->read_screens_bgra(f.gl_texture, s, cli_top_, cli_bottom_);
+                }
+                if (ready_pixels) {
+                    bool wake = false;
+                    {
+                        std::lock_guard<std::mutex> lock(sh_.m);
+                        wake = !sh_.fresh;
+                        sh_.pixels.resize(plane * 2);
+                        std::memcpy(sh_.pixels.data(), cli_top_.data(), plane * 4);
+                        std::memcpy(sh_.pixels.data() + plane, cli_bottom_.data(), plane * 4);
+                        sh_.pixel_scale = s;
+                        sh_.shared_scene = shared_scene;
+                        sh_.cinematic = has_cinematic;
+                        sh_.frame_number = frame_;
+                        sh_.published_ns = SDL_GetTicksNS();
+                        sh_.fresh = true;
+                    }
+                    if (wake && sh_.frame_event) {
+                        SDL_Event event{};
+                        event.type = sh_.frame_event;
+                        SDL_PushEvent(&event);
+                    }
+                }
             }
         }
         if (profile_) {
@@ -473,17 +522,27 @@ public:
                     const int64_t i = int64_t(frame_ - s.frame), n = int64_t(s.len - 1);
                     tx = s.x + int((s.x2 - s.x) * i / n), ty = s.y + int((s.y2 - s.y) * i / n);
                 }
-            } else if (s.kind == Step::Blow && active) {
-                blow = true;
-            } else if (s.kind == Step::Shot && frame_ == s.frame && f.top && f.bottom && !o_.shots.empty()) {
+            } else if (s.kind == Step::Shot && frame_ == s.frame && !o_.shots.empty()) {
                 const fs::path p = o_.shots / (s.name + ".bmp");
-                if (!write_bmp(p, f.top, f.bottom)) std::fprintf(stderr, "cannot write %s\n", p.string().c_str());
-                else std::printf("frame %llu: shot %s\n", (unsigned long long)frame_, p.string().c_str());
-                if (cinematic)
-                    write_bmp(o_.shots / (s.name + "_cinematic.bmp"), cinematic, nullptr);
-                if (o_.layer_shots && f.foreground_top && f.foreground_bottom) {
-                    write_bmp(o_.shots / (s.name + "_foreground_top.bmp"), f.foreground_top, nullptr);
-                    write_bmp(o_.shots / (s.name + "_foreground_touch.bmp"), f.foreground_bottom, nullptr);
+                if (f.top && f.bottom) {
+                    if (!write_bmp(p, f.top, f.bottom)) std::fprintf(stderr, "cannot write %s\n", p.string().c_str());
+                    else std::printf("frame %llu: shot %s\n", (unsigned long long)frame_, p.string().c_str());
+                    if (cinematic)
+                        write_bmp(o_.shots / (s.name + "_cinematic.bmp"), cinematic, nullptr);
+                    if (o_.layer_shots && f.foreground_top && f.foreground_bottom) {
+                        write_bmp(o_.shots / (s.name + "_foreground_top.bmp"), f.foreground_top, nullptr);
+                        write_bmp(o_.shots / (s.name + "_foreground_touch.bmp"), f.foreground_bottom, nullptr);
+                    }
+                } else if (f.gl_texture && offscreen_gl_) {
+                    const int sc = std::max(1, f.scale);
+                    std::vector<uint32_t> top_px, bot_px, cin_px;
+                    if (offscreen_gl_->read_screens_bgra(f.gl_texture, sc, top_px, bot_px) &&
+                        write_bmp(p, top_px.data(), bot_px.data(), kW * sc, kH * sc))
+                        std::printf("frame %llu: shot %s\n", (unsigned long long)frame_, p.string().c_str());
+                    else
+                        std::fprintf(stderr, "cannot write %s\n", p.string().c_str());
+                    if (cinematic_gl && offscreen_gl_->read_texture_bgra(cinematic_gl, kW * sc, kH * sc, cin_px))
+                        write_bmp(o_.shots / (s.name + "_cinematic.bmp"), cin_px.data(), nullptr, kW * sc, kH * sc);
                 }
             } else if (s.kind == Step::Type && frame_ == s.frame) {
                 queue_name_text(name_keyboard, s.name);
@@ -507,6 +566,13 @@ public:
             }
         }
         if (sh_.quit) return false;
+        if (presentation_) {
+            const int wanted_scale = presentation_->internal_scale();
+            if (wanted_scale != applied_internal_scale_) {
+                applied_internal_scale_ = wanted_scale;
+                rt_->set_video(make_video_settings(wanted_scale));
+            }
+        }
         pace();
         held |= sh_.held.load();
         pressed |= sh_.pressed.exchange(0);
@@ -678,6 +744,10 @@ private:
     std::vector<Step> script_;
     FILE* hashes_;
     bool track_scene_;
+    st::GamePresentation* presentation_ = nullptr;
+    st::OffscreenGlContext* offscreen_gl_ = nullptr;
+    int applied_internal_scale_ = 1;
+    std::vector<uint32_t> cli_top_, cli_bottom_;
     st::ScreenContext screen_context_;
     std::array<uint32_t, kW * kH> narration_pixels_{};
     ntr::Runtime* rt_ = nullptr;
@@ -753,6 +823,22 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--save") o.save = next_path();
         else if (a == "--no-save") o.no_save = true;
         else if (a == "--scale") o.scale = std::max(1, std::atoi(next().c_str()));
+        else if (a == "--internal-scale") {
+            const auto text = next();
+            char* end = nullptr;
+            const long v = std::strtol(text.c_str(), &end, 10);
+            if (text.empty() || *end || v < 1 || v > st::max_internal_scale)
+                return std::fprintf(stderr, "--internal-scale needs an integer from 1 to %d\n", st::max_internal_scale), false;
+            o.internal_scale = int(v);
+        }
+        else if (a == "--resolution") {
+            const auto text = next();
+            const int parsed = st::parse_internal_scale(text, false);
+            if (text != st::internal_resolution_value(parsed))
+                return std::fprintf(stderr, "unknown --resolution '%s' (expected e.g. 256x192, 512x384, 1536x1152)\n",
+                                    text.c_str()), false;
+            o.internal_scale = parsed;
+        }
         else if (a == "--cinematic-aspect") {
             const auto text = next();
             char* end = nullptr;
@@ -1006,6 +1092,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     ro.fast_cart = !o.slow_cart;
     ro.audio_interpolation = runtime_audio_interpolation(o.audio.interpolation);
     ro.cinematic_camera = presentation != nullptr || o.cinematic_aspect > 0 || !o.scene_profile.empty() || o.layer_shots;
+    ro.video = make_video_settings(o.internal_scale);
 
     Shared sh;
     sh.screen_features = o.screen_features;
@@ -1013,7 +1100,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
         const auto event = SDL_RegisterEvents(1);
         if (event != Uint32(-1)) sh.frame_event = event;
     }
-    StHost host(o, sh, std::move(script), hashes, mic_log.get(), ro.cinematic_camera);
+    StHost host(o, sh, std::move(script), hashes, mic_log.get(), ro.cinematic_camera, presentation);
     if (mic_profile.is_open()) host.set_mic_profile(&mic_profile);
     if (frame_profile.is_open()) host.set_profile(&frame_profile);
     if (scene_profile.is_open()) host.set_scene_profile(&scene_profile, code);
@@ -1021,6 +1108,7 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     std::unique_ptr<SDL_Window, decltype(&SDL_DestroyWindow)> owned_window(nullptr, SDL_DestroyWindow);
     std::unique_ptr<SDL_Renderer, decltype(&SDL_DestroyRenderer)> renderer(nullptr, SDL_DestroyRenderer);
     std::unique_ptr<SDL_Texture, decltype(&SDL_DestroyTexture)> texture(nullptr, SDL_DestroyTexture);
+    int texture_scale = 1;
     SDL_Window* window = presentation ? presentation->window() : nullptr;
     if (!o.headless) {
         if (!presentation) {
@@ -1029,11 +1117,14 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             if (window) renderer.reset(SDL_CreateRenderer(window, nullptr));
             if (!renderer)
                 return std::fprintf(stderr, "cannot open the window: %s\n", SDL_GetError()), 1;
-            SDL_SetRenderLogicalPresentation(renderer.get(), kW, 2 * kH, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+            texture_scale = std::max(1, o.internal_scale);
+            SDL_SetRenderLogicalPresentation(renderer.get(), kW, 2 * kH,
+                texture_scale > 1 ? SDL_LOGICAL_PRESENTATION_LETTERBOX : SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
             if (!SDL_SetRenderVSync(renderer.get(), SDL_RENDERER_VSYNC_ADAPTIVE)) SDL_SetRenderVSync(renderer.get(), 1);
-            texture.reset(SDL_CreateTexture(renderer.get(), SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, kW, 2 * kH));
+            texture.reset(SDL_CreateTexture(renderer.get(), SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+                                            kW * texture_scale, 2 * kH * texture_scale));
             if (!texture) return std::fprintf(stderr, "cannot create the game texture: %s\n", SDL_GetError()), 1;
-            SDL_SetTextureScaleMode(texture.get(), SDL_SCALEMODE_NEAREST);
+            SDL_SetTextureScaleMode(texture.get(), texture_scale > 1 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
         }
         if (o.fullscreen && !SDL_SetWindowFullscreen(window, true))
             std::fprintf(stderr, "cannot start in fullscreen: %s\n", SDL_GetError());
@@ -1044,10 +1135,30 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
     // The game thread: the runtime and its guest threads (fibers) live there.
     int rc = 0;
     std::thread game([&] {
-        auto rt = ntr::Runtime::create(std::move(rom), code, host, ro);
-        host.attach(rt.get());
-        rc = rt->run();
-        host.flush_save();  // a save the game finished writing in its last half second
+        st::OffscreenGlContext cli_gl;
+        bool bound_worker_gl = false;
+        if (presentation) {
+            bound_worker_gl = presentation->bind_worker_graphics();
+            if (!bound_worker_gl && ro.video.renderer != ntr::Renderer::Software) {
+                std::fprintf(stderr, "cannot bind worker OpenGL context, falling back to native software\n");
+                ro.video = make_video_settings(1);
+            }
+        } else if (ro.video.renderer != ntr::Renderer::Software) {
+            if (!cli_gl.open()) {
+                std::fprintf(stderr, "cannot open OpenGL context for upscaling, falling back to native software\n");
+                ro.video = make_video_settings(1);
+            } else {
+                host.set_offscreen_gl(&cli_gl);
+            }
+        }
+        {
+            auto rt = ntr::Runtime::create(std::move(rom), code, host, ro);
+            host.attach(rt.get());
+            rc = rt->run();
+            host.flush_save();  // a save the game finished writing in its last half second
+        }
+        host.set_offscreen_gl(nullptr);
+        if (bound_worker_gl) presentation->unbind_worker_graphics();
         if (rc != 0) std::fprintf(stderr, "the runtime stopped: %s\n", ntr::last_fatal());
         sh.done = true;
         if (!o.headless) {
@@ -1258,23 +1369,10 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
             sync_pause(menu_open && (!presentation || presentation->pause_on_menu()));
             if (menu_open) {
                 if (presentation) {
-                    bool fresh = false, shared_scene = false, cinematic = false;
-                    {
-                        std::lock_guard<std::mutex> lock(sh.m);
-                        fresh = sh.fresh;
-                        if (fresh) {
-                            frame.swap(sh.pixels);
-                            shared_scene = sh.shared_scene;
-                            cinematic = sh.cinematic;
-                            sh.fresh = false;
-                        }
-                    }
-                    if (fresh) {
-                        saw_shared_scene |= shared_scene;
-                        saw_cinematic |= cinematic;
-                        if (!presentation->update_game_frame(frame.data(), shared_scene, false, cinematic))
-                            view_error = sh.quit = true;
-                    }
+                    st::PresentedFrameInfo info;
+                    if (!presentation->present_published_game(false, info, false)) view_error = sh.quit = true;
+                    saw_shared_scene |= info.shared_scene;
+                    saw_cinematic |= info.cinematic;
                 }
                 if (!view_error && !menu->draw()) view_error = sh.quit = true;
                 if (test_menu_after && !view_error && (test_stage == 1 || test_stage == 3)) {
@@ -1284,28 +1382,50 @@ static int run_game(Options o, st::GamePresentation* presentation, st::GamePause
                 }
                 continue;
             }
-            bool draw, shared_scene = false, cinematic = false;
             uint64_t frame_number = 0, published_ns = 0;
-            {
-                std::lock_guard<std::mutex> lock(sh.m);
-                draw = sh.fresh;
-                if (draw) {
-                    frame.swap(sh.pixels);
-                    shared_scene = sh.shared_scene;
-                    cinematic = sh.cinematic;
-                    frame_number = sh.frame_number;
-                    published_ns = sh.published_ns;
-                    sh.fresh = false;
-                }
-            }
-            if (!draw) continue;
+            bool shared_scene = false, cinematic = false;
             const auto present_start = present_profile.is_open() ? SDL_GetTicksNS() : 0;
             if (presentation) {
-                saw_shared_scene |= shared_scene;
-                saw_cinematic |= cinematic;
-                if (!presentation->present_game(frame.data(), shared_scene, mouse_down, cinematic)) view_error = sh.quit = true;
+                st::PresentedFrameInfo info;
+                if (!presentation->present_published_game(mouse_down, info)) {
+                    view_error = sh.quit = true;
+                    continue;
+                }
+                if (!info.drew) continue;
+                saw_shared_scene |= info.shared_scene;
+                saw_cinematic |= info.cinematic;
+                frame_number = info.frame_number;
+                published_ns = info.published_ns;
+                shared_scene = info.shared_scene;
+                cinematic = info.cinematic;
             } else {
-                const bool drawn = SDL_UpdateTexture(texture.get(), nullptr, frame.data(), kW * 4) &&
+                bool draw = false;
+                int frame_scale = 1;
+                {
+                    std::lock_guard<std::mutex> lock(sh.m);
+                    draw = sh.fresh;
+                    if (draw) {
+                        frame.swap(sh.pixels);
+                        frame_scale = sh.pixel_scale;
+                        frame_number = sh.frame_number;
+                        published_ns = sh.published_ns;
+                        sh.fresh = false;
+                    }
+                }
+                if (!draw) continue;
+                if (frame_scale != texture_scale) {
+                    texture_scale = frame_scale;
+                    SDL_SetRenderLogicalPresentation(renderer.get(), kW, 2 * kH,
+                        texture_scale > 1 ? SDL_LOGICAL_PRESENTATION_LETTERBOX : SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+                    texture.reset(SDL_CreateTexture(renderer.get(), SDL_PIXELFORMAT_ARGB8888,
+                                                    SDL_TEXTUREACCESS_STREAMING, kW * texture_scale, 2 * kH * texture_scale));
+                    if (!texture) {
+                        view_error = sh.quit = true;
+                        continue;
+                    }
+                    SDL_SetTextureScaleMode(texture.get(), texture_scale > 1 ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+                }
+                const bool drawn = SDL_UpdateTexture(texture.get(), nullptr, frame.data(), kW * texture_scale * 4) &&
                                    SDL_SetRenderDrawColor(renderer.get(), 0, 0, 0, 255) &&
                                    SDL_RenderClear(renderer.get()) &&
                                    SDL_RenderTexture(renderer.get(), texture.get(), nullptr, nullptr) &&
@@ -1388,6 +1508,7 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
     o.module = launch.module;
     o.language = launch.language;
     o.scale = launch.scale;
+    o.internal_scale = launch.internal_scale;
     o.fullscreen = launch.fullscreen;
     o.no_save = test_menu_after != 0;
     // Advanced-checkpoint replay controls exist only in the explicit developer smoke-test path.
@@ -1406,6 +1527,7 @@ st::GameResult st::play_game_in_window(const GameLaunch& launch, GamePresentatio
     presentation.set_secondary_view(launch.secondary);
     presentation.set_audio_settings(launch.audio);
     presentation.set_pause_on_menu(launch.pause_on_menu);
+    presentation.set_internal_scale(launch.internal_scale);
     SDL_Window& window = *presentation.window();
 
     // Resize the existing window for the DS screens and put the launcher back at its previous size on Esc.

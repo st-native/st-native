@@ -18,6 +18,10 @@ public:
     void menu_input(Rml::Context& context, SDL_Event& event);
     SDL_Window* window() const override;
     bool update_game_frame(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) override;
+    bool bind_worker_graphics() override;
+    void unbind_worker_graphics() override;
+    bool publish_game_frame(const st::GameFrameInput& frame) override;
+    bool present_published_game(bool touch_captured, st::PresentedFrameInfo& info, bool render = true) override;
     bool present_game(const uint32_t* pixels, bool shared_scene, bool touch_captured, bool cinematic) override;
     double cinematic_aspect() const override;
     uint32_t screen_features() const override;
@@ -32,6 +36,10 @@ public:
     void set_audio_settings(const st::AudioSettings& audio) override;
     bool pause_on_menu() const override;
     void set_pause_on_menu(bool pause) override;
+    void set_internal_scale(int scale) override;
+    int internal_scale() const override;
+    int active_frame_scale() const;
+    bool verify_rendered_views(int expected_scale);
 
 private:
     bool draw_game();

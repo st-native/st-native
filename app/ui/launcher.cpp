@@ -155,7 +155,7 @@ st::AudioSettings read_audio_settings(Rml::ElementDocument& document) {
 
 bool select_settings_tab(Rml::ElementDocument& document, const std::string& id) {
     if (!id.starts_with("tab-") || !document.GetElementById(id)) return false;
-    for (const std::string key : {"screens", "map", "features", "audio", "window", "game"}) {
+    for (const std::string key : {"screens", "graphics", "map", "features", "audio", "window", "game"}) {
         auto* tab = document.GetElementById("tab-" + key);
         if (!tab) continue;
         const bool selected = id == tab->GetId();
@@ -184,6 +184,7 @@ public:
         enable_secondary_view(document_, prefs_.layout, prefs_.secondary);
         populate_audio_devices(document_, prefs_.audio);
         show_audio_settings(document_, prefs_.audio);
+        control("internal-resolution").SetValue(st::internal_resolution_value(prefs_.internal_scale));
         syncing_ = false;
         document_.AddEventListener(Rml::EventId::Click, this);
         document_.AddEventListener(Rml::EventId::Change, this);
@@ -212,6 +213,7 @@ public:
             enable_secondary_view(document_, prefs_.layout, prefs_.secondary);
             prefs_.audio = read_audio_settings(document_);
             update_audio_labels(document_, prefs_.audio);
+            prefs_.internal_scale = st::parse_internal_scale(control("internal-resolution").GetValue());
             persist();
             update_buttons();
             return;
@@ -282,7 +284,7 @@ public:
             ready_ = st::GameLaunch{path_from_utf8(prefs_.rom), module, language,
                                     prefs_.scale[0] - '0', prefs_.window == "fullscreen", prefs_.layout,
                                     prefs_.automatic_join, prefs_.enhancements, prefs_.audio,
-                                    prefs_.pause_on_menu, prefs_.secondary};
+                                    prefs_.pause_on_menu, prefs_.secondary, prefs_.internal_scale};
         } else if (action_ == Action::play && result == 0) {
             show_status("Preparation did not return a game module.", true);
         }
@@ -299,6 +301,7 @@ public:
     }
     st::ScreenLayout screen_layout() const { return prefs_.layout; }
     bool automatic_join() const { return prefs_.automatic_join; }
+    int internal_scale() const { return prefs_.internal_scale; }
     bool pause_on_menu() const { return prefs_.pause_on_menu; }
     st::ScreenEnhancements screen_enhancements() const { return prefs_.enhancements; }
     st::SecondaryViewSettings secondary_view() const { return prefs_.secondary; }
@@ -347,6 +350,12 @@ public:
         prefs_.audio = audio;
         persist();
         update_buttons();
+    }
+    void save_internal_scale(int internal_scale) {
+        internal_scale = st::normalize_internal_scale(internal_scale);
+        control("internal-resolution").SetValue(st::internal_resolution_value(internal_scale));
+        prefs_.internal_scale = internal_scale;
+        persist();
     }
     std::optional<st::GameLaunch> take_launch() { return std::exchange(ready_, std::nullopt); }
 
@@ -415,7 +424,7 @@ private:
         control("rebuild").SetDisabled(busy() || !verified_);
         control("remove-cache").SetDisabled(busy() || cached_builds_ == 0);
         control("open-log").SetDisabled(run_log_.empty());
-        for (const auto id : {"scale", "language", "pause-on-menu", "window-mode", "screen-layout", "auto-join"})
+        for (const auto id : {"scale", "language", "pause-on-menu", "window-mode", "screen-layout", "auto-join", "internal-resolution"})
             control(id).SetDisabled(busy());
         enable_enhancements(document_, !busy() && prefs_.automatic_join);
         enable_audio_controls(document_, !busy(), prefs_.audio.mic_mode);
@@ -603,9 +612,18 @@ public:
         populate_audio_devices(document_, launcher_.audio_settings());
         show_audio_settings(document_, launcher_.audio_settings());
         enable_audio_controls(document_, true, launcher_.audio_settings().mic_mode);
+        control("pause-internal-resolution").SetValue(st::internal_resolution_value(launcher_.internal_scale()));
         syncing_ = false;
         document_.Show();
         document_.GetElementById("resume")->Focus();
+        ++open_count_;
+        if (smoke_verify_views_ && expected_open_scale_ > 0 && !window_.verify_rendered_views(expected_open_scale_))
+            smoke_failed_ = true;
+        if (open_count_ == 1 && !smoke_switch_resolution_.empty()) {
+            document_.GetElementById("tab-graphics")->DispatchEvent(Rml::EventId::Click, {});
+            control("pause-internal-resolution").SetValue(smoke_switch_resolution_);
+            expected_open_scale_ = st::parse_internal_scale(smoke_switch_resolution_);
+        }
     }
     void close() override { document_.Hide(); }
     void input(SDL_Event& event) override {
@@ -617,8 +635,17 @@ public:
         }
         window_.menu_input(context_, event);
     }
-    bool draw() override { return window_.draw_pause(context_); }
+    bool draw() override { return !smoke_failed_ && window_.draw_pause(context_); }
     st::PauseAction action() const override { return action_; }
+
+    void configure_smoke(int initial_scale, std::string switch_resolution) {
+        smoke_verify_views_ = true;
+        smoke_failed_ = false;
+        open_count_ = 0;
+        expected_open_scale_ = initial_scale;
+        smoke_switch_resolution_ = std::move(switch_resolution);
+    }
+    bool smoke_ok() const { return !smoke_failed_; }
 
 private:
     bool fullscreen() const { return SDL_GetWindowFlags(window_.window()) & SDL_WINDOW_FULLSCREEN; }
@@ -646,6 +673,7 @@ private:
             if (!syncing_ && document_.IsVisible()) {
                 const auto layout = parse_screen_layout(control("pause-screen-layout").GetValue());
                 const bool automatic_join = control("auto-join").GetValue() != "manual";
+                const int internal_scale = st::parse_internal_scale(control("pause-internal-resolution").GetValue());
                 const auto enhancements = read_enhancements(document_);
                 const auto audio = read_audio_settings(document_);
                 const auto secondary = read_secondary_view(document_);
@@ -665,6 +693,10 @@ private:
                 if (secondary != launcher_.secondary_view()) {
                     window_.set_secondary_view(secondary);
                     launcher_.save_secondary_view(secondary);
+                }
+                if (internal_scale != launcher_.internal_scale()) {
+                    window_.set_internal_scale(internal_scale);
+                    launcher_.save_internal_scale(internal_scale);
                 }
             }
             return;
@@ -693,6 +725,9 @@ private:
     Launcher& launcher_;
     st::PauseAction action_ = st::PauseAction::stay;
     bool syncing_ = false;
+    bool smoke_verify_views_ = false, smoke_failed_ = false;
+    int open_count_ = 0, expected_open_scale_ = 0;
+    std::string smoke_switch_resolution_;
 };
 
 bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDocument& document,
@@ -713,7 +748,7 @@ bool check_layout(LauncherWindow& window, Rml::Context& context, Rml::ElementDoc
         return Rect{start.x, start.y, start.x + size.x, start.y + size.y};
     };
     constexpr std::array ids{"mark", "game-heading", "rom", "browse", "status", "play", "settings-heading",
-                             "tab-screens", "tab-map", "tab-features", "tab-audio", "tab-window", "tab-game",
+                             "tab-screens", "tab-graphics", "internal-resolution", "tab-map", "tab-features", "tab-audio", "tab-window", "tab-game",
                              "unify-cutscenes", "narrative-subtitles", "hide-secondary",
                              "master-volume", "master-volume-value", "mute-unfocused", "audio-interp",
                              "output-device", "mic-mode", "input-device", "mic-gain", "mic-gain-value",
@@ -817,27 +852,51 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
             game->layout = layout;
             game->fullscreen = layout == st::ScreenLayout::classic || layout == st::ScreenLayout::picture_in_picture;
             launcher.save_screen_settings(game->layout, game->automatic_join, game->enhancements);
+            int initial_scale = st::default_internal_scale;
+            if (const char* res = std::getenv("ST_NATIVE_SMOKE_RESOLUTION"))
+                initial_scale = st::parse_internal_scale(res);
+            std::string switch_res;
+            if (const char* sw = std::getenv("ST_NATIVE_SMOKE_SWITCH_RESOLUTION"))
+                switch_res = sw;
+            const int final_scale = switch_res.empty() ? initial_scale : st::parse_internal_scale(switch_res);
+            game->internal_scale = initial_scale;
+            launcher.save_internal_scale(initial_scale);
+            pause.configure_smoke(initial_scale, switch_res);
             document->Hide();
             const auto result = st::play_game_in_window(*game, window, pause, smoke_frames);
+            const bool views_ok = pause.smoke_ok() && window.verify_rendered_views(final_scale);
             document->Show();
-            if (result.exit_code || result.close_requested ||
+            if (result.exit_code || result.close_requested || !views_ok ||
                 handle != SDL_GetPointerProperty(properties, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) ||
                 !window.draw(*context)) return 8;
         }
         return 0;
     }
     if (smoke_test) {
+        // Check the user-visible labels as well as the selected values in both dropdowns.
+        for (auto* select : {document->GetElementById("internal-resolution"),
+                             pause_document->GetElementById("pause-internal-resolution")}) {
+            auto* resolution = static_cast<Rml::ElementFormControlSelect*>(select);
+            if (resolution->GetNumOptions() != static_cast<int>(st::internal_resolution_options.size())) return 13;
+            int index = 0;
+            for (const auto& option : st::internal_resolution_options) {
+                const auto* entry = resolution->GetOption(index++);
+                if (entry->GetAttribute<Rml::String>("value", "") != option.value ||
+                    entry->GetInnerRML() != option.label) return 13;
+            }
+        }
         auto preview = [&previews](const char* name) { return previews.empty() ? fs::path{} : previews / name; };
         if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, preview("launcher-wide.bmp")))
             return 2;
         if (!check_layout(window, *context, *document, 1040, 610, false, false, {})) return 4;
-        for (const auto& [tab, field] : {std::pair{"tab-window", "window-mode"}, std::pair{"tab-game", "language"},
+        for (const auto& [tab, field] : {std::pair{"tab-graphics", "internal-resolution"}, std::pair{"tab-window", "window-mode"}, std::pair{"tab-game", "language"},
                                          std::pair{"tab-map", "secondary-size"},
                                          std::pair{"tab-features", "unify-cutscenes"},
                                          std::pair{"tab-audio", "master-volume"},
                                          std::pair{"tab-screens", "screen-layout"}}) {
             document->GetElementById(tab)->DispatchEvent(Rml::EventId::Click, {});
             if (!window.draw(*context) || !document->GetElementById(field)->IsVisible(true)) return 11;
+            if (!check_layout(window, *context, *document, kWidth, kHeight, false, false, {})) return 12;
         }
         if (!check_layout(window, *context, *document, 420, 780, true, false, preview("launcher-compact.bmp"))) return 5;
         if (!check_layout(window, *context, *document, 390, 300, true, true, {})) return 6;
@@ -1000,6 +1059,18 @@ int run_launcher(LauncherWindow& window, bool smoke_test, const fs::path& previe
         cursors.SetMouseCursor("text");
         if (SDL_GetCursor() != text) return 12;
         if (!window.present_game(tiles.data(), false, false, false) || SDL_GetCursor() != arrow) return 12;
+        pause_document->GetElementById("tab-graphics")->DispatchEvent(Rml::EventId::Click, {});
+        auto& pause_res = static_cast<Rml::ElementFormControl&>(*pause_document->GetElementById("pause-internal-resolution"));
+        if (!pause.draw() || !pause_res.IsVisible(true) || layout_control.IsVisible(true)) return 11;
+        for (const auto& res : st::internal_resolution_options) {
+            pause_res.SetValue(res.value);
+            if (launcher.internal_scale() != res.scale || window.internal_scale() != res.scale || !pause.draw())
+                return 13;
+        }
+        pause_res.SetValue(st::internal_resolution_value(st::default_internal_scale));
+        pause_document->GetElementById("tab-window")->DispatchEvent(Rml::EventId::Click, {});
+        if (!pause.draw() || !pause_document->GetElementById("display")->IsVisible(true) ||
+            layout_control.IsVisible(true) || pause_res.IsVisible(true)) return 11;
         pause.close();
         document->Show();
         if (!window.draw(*context)) return 12;

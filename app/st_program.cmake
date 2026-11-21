@@ -6,8 +6,9 @@ include(${ST_ROOT}/spike/m1a/host/m1a_targets.cmake)
 
 # The game host is shared by the CLI and the desktop launcher.
 add_library(st_game_host STATIC ${ST_ROOT}/app/st_native.cpp ${ST_ROOT}/app/audio/audio_devices.cpp
-            ${ST_ROOT}/app/audio/mic_source.cpp ${ST_ROOT}/game/st/hooks/st_hooks.cpp
-            ${ST_ROOT}/game/st/hooks/st_probe.cpp ${ST_ROOT}/game/st/hooks/name_keyboard.cpp)
+            ${ST_ROOT}/app/audio/mic_source.cpp ${ST_ROOT}/app/present/gl_frame_bridge.cpp
+            ${ST_ROOT}/game/st/hooks/st_hooks.cpp ${ST_ROOT}/game/st/hooks/st_probe.cpp
+            ${ST_ROOT}/game/st/hooks/name_keyboard.cpp)
 target_include_directories(st_game_host PRIVATE ${ST_ROOT}/app ${ST_ROOT}/game/st/hooks)
 target_link_libraries(st_game_host PUBLIC ntr_runtime ntr_common SDL3::SDL3-static)
 add_executable(st_native ${ST_ROOT}/app/st_native_main.cpp)
@@ -20,6 +21,8 @@ endif()
 if(FFCC_BUILD_TESTS)
   add_executable(st_screen_layout_tests "${ST_ROOT}/tests/test_screen_layout.cpp")
   add_test(NAME st_screen_layout COMMAND st_screen_layout_tests)
+  add_executable(st_internal_resolution_tests "${ST_ROOT}/tests/test_internal_resolution.cpp")
+  add_test(NAME st_internal_resolution COMMAND st_internal_resolution_tests)
   add_executable(st_cinematic_tests "${ST_ROOT}/tests/test_cinematic_projection.cpp"
                  "${CMAKE_SOURCE_DIR}/runtime/src/gx_match.cpp")
   target_include_directories(st_cinematic_tests PRIVATE "${CMAKE_SOURCE_DIR}/runtime/src"
