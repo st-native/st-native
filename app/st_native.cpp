@@ -417,20 +417,14 @@ public:
         if (!o_.control.empty() && !control(f)) return false;
         const bool detected_scene = track_scene_ && screen_context_.update(*rt_, f, frame_);
         auto game_menu = track_scene_ ? screen_context_.menu(*rt_, f, name_keyboard.active()) : st::GameMenu::none;
-        // The opening context is verified independently. Alpha here only determines whether
-        // the existing prompt's 2D layer needs replacement; it never classifies a game scene.
         const bool opening = track_scene_ && screen_context_.scene() == st::CinematicScene::opening;
         if (!opening) title_prompt_seen_ = false;
-        if (opening && !title_prompt_seen_)
-            for (const auto* layer : {f.foreground_bottom,f.foreground_top}) {
-                if (!layer) continue;
-                for (int y = 136; y < 158 && !title_prompt_seen_; ++y)
-                    for (int x = 16; x < 240; ++x)
-                        if (layer[y*kW+x] >> 24) { title_prompt_seen_ = true; break; }
-            }
-        // The DS alternates capture targets and blinks its caption. Keep the replacement stable
-        // after its first visible foreground, and release it with the verified opening context.
-        if (opening) game_menu = title_prompt_seen_ ? st::GameMenu::title : st::GameMenu::opening;
+        if (opening) {
+            // The DS alternates capture targets. The title remains interactive
+            // once the ribbon is scheduled, including frames when it blinks.
+            if (!title_prompt_seen_) title_prompt_seen_ = screen_context_.title_interface_ready(*rt_,o_.language);
+            game_menu = title_prompt_seen_ ? st::GameMenu::title : st::GameMenu::opening;
+        }
         sh_.game_menu = game_menu;
         const auto feature = screen_context_.narration() ? st::ScreenFeature::subtitles :
             screen_context_.touch_only() ? st::ScreenFeature::hide_secondary : st::ScreenFeature::cutscenes;
@@ -598,10 +592,10 @@ public:
         }
         if (sh_.quit) return false;
         if (presentation_) {
-            // The 2D controls and subtitle compositor consume native software planes.
-            // Keep upscaling active for gameplay and GPU cinematics outside these scenes.
+            // File menus and the illustrated narration need native software
+            // planes. The title uses its own sprite data on either renderer.
             const bool native_ui = screen_context_.narration() ||
-                (sh_.pc_game_menus && (opening || game_menu != st::GameMenu::none));
+                (sh_.pc_game_menus && !opening && game_menu != st::GameMenu::none);
             const int wanted_scale = native_ui ? 1 : presentation_->internal_scale();
             if (wanted_scale != applied_internal_scale_) {
                 applied_internal_scale_ = wanted_scale;

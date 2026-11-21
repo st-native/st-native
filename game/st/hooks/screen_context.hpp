@@ -55,6 +55,17 @@ public:
     bool touch_only() const { return policy_.scene() == CinematicScene::save_menu; }
     int narration_text_offset() const { return prologue_text_offset_y; }
 
+    bool title_interface_ready(ntr::Runtime& runtime, uint8_t language) const {
+        if (scene() != CinematicScene::opening || !runtime.inspect_graphics(false).screen_swap) return false;
+        // BKIE rev. 0. On the swapped half of the opening capture, the title's
+        // sprite count at 0x0204af2c is 0 during the train scene and 21 during
+        // the early logo reveal. The complete title ribbon raises it to 46/50/48
+        // for English/French/Spanish. Checked on a natural reveal, a Start skip,
+        // and both software and GL replays. The other half has a separate count.
+        const auto expected = language == 2 ? 50u : language == 5 ? 48u : 46u;
+        return runtime.read_main_ram_word(0x0204af2c) == expected;
+    }
+
     GameMenu menu(ntr::Runtime& runtime, const ntr::Frame& frame, bool editing_name) const {
         if (touch_only()) {
             const auto phase = runtime.read_main_ram_word(0x022e560c);

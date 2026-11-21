@@ -35,11 +35,12 @@ Touch Screen art, without PiP; see [Narrative presentation](NARRATIVE_PRESENTATI
 keep the chosen two-screen layout. The pre-title 3D opening uses a re-rendered central projection
 in the largest centered 4:3 game view; unused window space stays black. It recovers the vertical interval omitted between the original off-axis views, instead of
 compositing the two finished screens. The original projection and game state are restored after drawing the extra
-view. This first implementation rasterizes at 256×192. It recomposes a camera view rather than preserving every
+view. It renders at the selected internal resolution, including with PC Game Menus enabled. It recomposes a
+camera view rather than preserving every
 pixel of the two original screens; scaling and reframing change the presentation. A lossless claim is not verified.
 The opening's game-side profile places its complete screen-space 3D UI canvas inside a centered 168×126 rectangle
 at (44, 4), above the lower prompt. Only the extra cinematic image uses this placement. The 2D prompt, copyright,
-touch mapping and both original DS screen images are unchanged. The engine accepts a generic placement rectangle;
+touch mapping and both original DS screen images keep their placement. The engine accepts a generic placement rectangle;
 it has no logo-specific positions or game IDs.
 **Original DS** preserves the two-screen composition. F2 overrides the current scene. The Cole profile uses the
 same symmetric camera with full-size UI; other interactive scene rules remain Proposed. See the

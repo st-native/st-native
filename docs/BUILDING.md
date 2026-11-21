@@ -168,7 +168,8 @@ through **3072x2304**. The launcher and pause menu share this preference. If the
 tab appears with an empty selector, run `tools\build\build_program.cmd --tests` to rebuild
 the executable and copy the matching UI assets, then reopen it from the release build folder.
 
-The narrated prologue and the PC startup menus use native frames for subtitle and control overlays.
+The 3D train opening and title screen use the selected internal resolution with PC Game Menus
+enabled. File menus and the illustrated prologue use native frames for their controls and subtitles.
 The selected resolution resumes when 3D gameplay starts.
 
 For a ROM smoke test at a specific resolution, set `ST_NATIVE_SMOKE_RESOLUTION` (for example,

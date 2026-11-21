@@ -143,6 +143,8 @@ Start accepts the name, and L3 still opens port settings.
   by Fontworks was the closest match in a local comparison of the original letter shapes. The
   project's new phrases are rasterized at DS size from the open font. The exact original typeface
   remains unconfirmed. Regenerate the letter masks with `tools/testing/render_title_prompt.py`.
+  Read-only title sprite state identifies when to accept the second press on both renderers. The
+  3D opening keeps the selected resolution while the prompt and ribbon stay in their own sprite layer.
 - In the narrated prologue, **Skip opening story** is remappable and defaults to Start/Enter.
   The first press reveals the Skip button. Press the shortcut again or click the button to skip.
   With PC game menus enabled, the original button and lettering stay visible. A small matching
